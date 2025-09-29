@@ -820,6 +820,92 @@ def upload_video():
 
 
 
+# @app.route("/videos", methods=["GET"])
+# def list_videos():
+#     """
+#     সব ভিডিও রিটার্ন করবে, কিন্তু viewers / timestamps ইত্যাদি date বা date range অনুযায়ী ফিল্টার হবে।
+#     Query params:
+#       ?date=YYYY-MM-DD  অথবা
+#       ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+#     """
+#     # date range বের করি
+#     single_date = request.args.get("date")
+#     start_date = request.args.get("start_date")
+#     end_date = request.args.get("end_date")
+#
+#     date_filter_start = None
+#     date_filter_end = None
+#
+#     if single_date:
+#         try:
+#             day_start = datetime.fromisoformat(single_date).replace(hour=0, minute=0, second=0, microsecond=0)
+#             day_end = day_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+#             date_filter_start, date_filter_end = day_start, day_end
+#         except ValueError:
+#             return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+#
+#     elif start_date and end_date:
+#         try:
+#             start = datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
+#             end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+#             date_filter_start, date_filter_end = start, end
+#         except ValueError:
+#             return jsonify({"error": "Invalid start_date or end_date format. Use YYYY-MM-DD"}), 400
+#
+#     vids = []
+#     for v in videos_col.find().sort("uploaded_at", -1):
+#         video_id = str(v["_id"])
+#         video_url = None
+#         if v.get("filename"):
+#             video_url = f"{request.host_url}video/{video_id}/stream"
+#         image_url = None
+#         if v.get("image_filename"):
+#             image_url = f"{request.host_url}uploads/{v.get('image_filename')}"
+#
+#         # ---- viewers ফিল্টার ----
+#         viewers = v.get("viewers", [])
+#         if date_filter_start and date_filter_end:
+#             filtered_viewers = []
+#             for viewer in viewers:
+#                 timestamps = viewer.get("timestamps", [])
+#                 # timestamps থেকে শুধু সেই তারিখেরগুলো নেব
+#                 filtered_ts = [ts for ts in timestamps if
+#                                date_filter_start.isoformat() <= ts <= date_filter_end.isoformat()]
+#                 if filtered_ts:
+#                     filtered_viewers.append({"ip": viewer.get("ip"), "timestamps": filtered_ts})
+#             viewers = filtered_viewers
+#
+#         vids.append({
+#             "id": video_id,
+#             "title": v.get("title"),
+#             "original_filename": v.get("original_filename"),
+#             "uploaded_at": v.get("uploaded_at"),
+#             "unique_views": v.get("unique_views", 0),
+#             "total_clicks": v.get("total_clicks", 0),
+#             "video_url": video_url,
+#             "video_link": v.get("video_link"),
+#             "subtitle_text": v.get("subtitle_text"),
+#             "image_url": image_url,
+#             "viewers": viewers  # ফিল্টারকৃত viewers
+#         })
+#     return jsonify({"videos": vids})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from datetime import datetime
+
 @app.route("/videos", methods=["GET"])
 def list_videos():
     """
@@ -889,9 +975,6 @@ def list_videos():
             "viewers": viewers  # ফিল্টারকৃত viewers
         })
     return jsonify({"videos": vids})
-
-
-
 
 
 
