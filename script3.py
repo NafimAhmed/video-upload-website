@@ -372,6 +372,78 @@ def list_videos():
 
 
 
+# ────────────── Images Collection ──────────────
+images_col = db.images
+
+
+# ────────────── Admin Upload Image ──────────────
+@app.route("/admin/upload_image", methods=["POST"])
+def upload_image():
+    """
+    শুধু ইমেজ আপলোড করতে।
+    form-data:
+      - image (file)
+      - title (optional)
+    """
+    if "image" not in request.files or not request.files["image"].filename:
+        return jsonify({"error": "no image file provided"}), 400
+
+    img = request.files["image"]
+    safe_img = secure_filename(img.filename)
+    img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
+    img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
+    img.save(img_path)
+
+    title = (request.form.get("title") or "").strip() or safe_img
+
+    doc = {
+        "title": title,
+        "filename": img_name,
+        "uploaded_at": now_iso()
+    }
+    res = images_col.insert_one(doc)
+
+    return jsonify({
+        "message": "image uploaded",
+        "image": {
+            "id": str(res.inserted_id),
+            "title": title,
+            "url": f"{request.host_url}uploads/{img_name}"
+        }
+    }), 201
+
+
+# ────────────── Images List ──────────────
+@app.route("/images", methods=["GET"])
+def list_images():
+    """
+    সব ইমেজ লিস্ট করবে
+    """
+    imgs = []
+    for img in images_col.find().sort("uploaded_at", -1):
+        imgs.append({
+            "id": str(img["_id"]),
+            "title": img.get("title"),
+            "uploaded_at": img.get("uploaded_at"),
+            "url": f"{request.host_url}uploads/{img.get('filename')}"
+        })
+    return jsonify({"images": imgs})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
