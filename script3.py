@@ -1,358 +1,3 @@
-#
-# import os
-# from datetime import datetime, timezone
-# from pymongo import MongoClient
-# from bson.objectid import ObjectId
-# from flask import Flask, request, jsonify, send_from_directory
-# from flask_cors import CORS
-# from werkzeug.utils import secure_filename
-# from dotenv import load_dotenv
-#
-# # Load .env if present
-# load_dotenv()
-#
-# # Configuration via env vars
-# MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-# DB_NAME = os.getenv("DB_NAME", "video_app_db")
-# UPLOAD_FOLDER = os.path.abspath(os.getenv("UPLOAD_FOLDER", "./uploads"))  # absolute path
-# ALLOWED_EXTENSIONS = set(["mp4", "mov", "mkv", "webm", "ogg"])
-#
-# # Ensure upload folder exists
-# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-#
-# # Flask app
-# app = Flask(__name__)
-# app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-# CORS(app)
-#
-# # Mongo client
-# client = MongoClient(MONGO_URI)
-# db = client[DB_NAME]
-# videos_col = db.videos
-#
-# # Helpers
-# def allowed_file(filename):
-#     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-#
-# def now_iso():
-#     return datetime.now(timezone.utc).isoformat()
-#
-# def get_client_ip():
-#     xff = request.headers.get("X-Forwarded-For", "")
-#     if xff:
-#         ip = xff.split(",")[0].strip()
-#         if ip:
-#             return ip
-#     return request.remote_addr or "unknown"
-#
-# # ────────────── Serve uploaded files ──────────────
-# @app.route("/uploads/<path:filename>")
-# def uploaded_file(filename):
-#     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
-#
-# # ────────────── Admin Edit Video ──────────────
-# @app.route("/admin/video/<video_id>", methods=["PATCH"])
-# def edit_video(video_id):
-#     try:
-#         oid = ObjectId(video_id)
-#     except Exception:
-#         return jsonify({"error": "invalid video id"}), 400
-#
-#     v = videos_col.find_one({"_id": oid})
-#     if not v:
-#         return jsonify({"error": "video not found"}), 404
-#
-#     new_title = (request.form.get("title") or "").strip() if request.form else None
-#     new_video_link = (request.form.get("video_link") or "").strip() if request.form else None
-#     new_subtitle_text = (request.form.get("subtitle") or "").strip() if request.form else None
-#
-#     update_fields = {}
-#
-#     if new_title:
-#         update_fields["title"] = new_title
-#     if new_video_link is not None and new_video_link != "":
-#         update_fields["video_link"] = new_video_link
-#     if new_subtitle_text is not None:
-#         update_fields["subtitle_text"] = new_subtitle_text
-#
-#     if "image" in request.files and request.files["image"].filename:
-#         img = request.files["image"]
-#         safe_img = secure_filename(img.filename)
-#         img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
-#         img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
-#         img.save(img_path)
-#         update_fields["image_filename"] = img_name
-#
-#     if not update_fields:
-#         return jsonify({"error": "no new data provided"}), 400
-#
-#     result = videos_col.update_one({"_id": oid}, {"$set": update_fields})
-#
-#     if result.matched_count == 0:
-#         return jsonify({"error": "video not found during update"}), 404
-#
-#     updated_doc = videos_col.find_one({"_id": oid})
-#
-#     image_url = None
-#     if updated_doc.get("image_filename"):
-#         image_url = f"{request.host_url}uploads/{updated_doc.get('image_filename')}"
-#
-#     return jsonify({
-#         "message": "video updated",
-#         "video": {
-#             "id": str(updated_doc["_id"]),
-#             "title": updated_doc.get("title"),
-#             "video_link": updated_doc.get("video_link"),
-#             "subtitle_text": updated_doc.get("subtitle_text"),
-#             "image_url": image_url,
-#             "original_filename": updated_doc.get("original_filename"),
-#             "uploaded_at": updated_doc.get("uploaded_at"),
-#             "unique_views": updated_doc.get("unique_views", 0),
-#             "total_clicks": updated_doc.get("total_clicks", 0)
-#         }
-#     })
-#
-# # ────────────── Admin Upload Video ──────────────
-# @app.route("/admin/upload", methods=["POST"])
-# def upload_video():
-#     title = (request.form.get("title") or "").strip()
-#     video_link = (request.form.get("video_link") or "").strip()
-#     subtitle_text = (request.form.get("subtitle") or "").strip()
-#
-#     filename_for_db = None
-#     original_filename = None
-#     image_filename = None
-#
-#     if "file" in request.files and request.files["file"].filename:
-#         f = request.files["file"]
-#         if not allowed_file(f.filename):
-#             return jsonify({"error": f"filetype not allowed. allowed: {ALLOWED_EXTENSIONS}"}), 400
-#
-#         safe_name = secure_filename(f.filename)
-#         unique_prefix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-#         saved_name = f"{unique_prefix}_{safe_name}"
-#         save_path = os.path.join(app.config["UPLOAD_FOLDER"], saved_name)
-#         f.save(save_path)
-#
-#         filename_for_db = saved_name
-#         original_filename = safe_name
-#         title = title or f.filename
-#
-#     elif video_link:
-#         title = title or "External Video"
-#     else:
-#         return jsonify({"error": "no file or video_link provided"}), 400
-#
-#     if "image" in request.files and request.files["image"].filename:
-#         img = request.files["image"]
-#         safe_img = secure_filename(img.filename)
-#         img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
-#         img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
-#         img.save(img_path)
-#         image_filename = img_name
-#
-#     doc = {
-#         "title": title,
-#         "filename": filename_for_db,
-#         "original_filename": original_filename,
-#         "video_link": video_link,
-#         "subtitle_text": subtitle_text,
-#         "image_filename": image_filename,
-#         "uploaded_at": now_iso(),
-#         "viewers": [],
-#         "unique_views": 0,
-#         "total_clicks": 0
-#     }
-#
-#     res = videos_col.insert_one(doc)
-#
-#     return jsonify({
-#         "message": "uploaded",
-#         "video": {
-#             "id": str(res.inserted_id),
-#             "title": title
-#         }
-#     }), 201
-#
-# # ────────────── Videos list ──────────────
-# @app.route("/videos", methods=["GET"])
-# def list_videos():
-#     vids = []
-#     for v in videos_col.find().sort("uploaded_at", -1):
-#         video_id = str(v["_id"])
-#         video_url = None
-#         if v.get("filename"):
-#             video_url = f"{request.host_url}video/{video_id}/stream"
-#         image_url = None
-#         if v.get("image_filename"):
-#             image_url = f"{request.host_url}uploads/{v.get('image_filename')}"
-#         vids.append({
-#             "id": video_id,
-#             "title": v.get("title"),
-#             "original_filename": v.get("original_filename"),
-#             "uploaded_at": v.get("uploaded_at"),
-#             "unique_views": v.get("unique_views", 0),
-#             "total_clicks": v.get("total_clicks", 0),
-#             "video_url": video_url,
-#             "video_link": v.get("video_link"),
-#             "subtitle_text": v.get("subtitle_text"),
-#             "image_url": image_url,
-#             "viewers": v.get("viewers", [])
-#         })
-#     return jsonify({"videos": vids})
-#
-# # ────────────── Video detail ──────────────
-# @app.route("/video/<video_id>", methods=["GET"])
-# def video_detail(video_id):
-#     try:
-#         oid = ObjectId(video_id)
-#     except Exception:
-#         return jsonify({"error": "invalid video id"}), 400
-#
-#     v = videos_col.find_one({"_id": oid})
-#     if not v:
-#         return jsonify({"error": "video not found"}), 404
-#
-#     image_url = None
-#     if v.get("image_filename"):
-#         image_url = f"{request.host_url}uploads/{v.get('image_filename')}"
-#
-#     return jsonify({
-#         "id": str(v["_id"]),
-#         "title": v.get("title"),
-#         "original_filename": v.get("original_filename"),
-#         "uploaded_at": v.get("uploaded_at"),
-#         "unique_views": v.get("unique_views", 0),
-#         "total_clicks": v.get("total_clicks", 0),
-#         "video_url": f"{request.host_url}video/{v['_id']}/stream",
-#         "video_link": v.get("video_link"),
-#         "subtitle_text": v.get("subtitle_text"),
-#         "image_url": image_url,
-#         "viewers": v.get("viewers", [])
-#     })
-#
-# # ────────────── Stream Video ──────────────
-# @app.route("/video/<video_id>/stream", methods=["GET"])
-# def stream_video(video_id):
-#     try:
-#         oid = ObjectId(video_id)
-#     except Exception:
-#         return jsonify({"error": "invalid video id"}), 400
-#     v = videos_col.find_one({"_id": oid})
-#     if not v:
-#         return jsonify({"error": "video not found"}), 404
-#     filename = v.get("filename")
-#     if not filename:
-#         return jsonify({"error": "file missing"}), 404
-#     return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=False)
-#
-# # ────────────── Record Click ──────────────
-# @app.route("/video/<video_id>/click", methods=["POST"])
-# def video_click(video_id):
-#     try:
-#         oid = ObjectId(video_id)
-#     except Exception:
-#         return jsonify({"error": "invalid video id"}), 400
-#
-#     client_ip = get_client_ip()
-#     timestamp = now_iso()
-#
-#     update_result = videos_col.update_one(
-#         {"_id": oid, "viewers.ip": client_ip},
-#         {
-#             "$push": {"viewers.$.timestamps": timestamp},
-#             "$inc": {"total_clicks": 1}
-#         }
-#     )
-#
-#     if update_result.matched_count == 0:
-#         new_viewer = {"ip": client_ip, "timestamps": [timestamp]}
-#         update_result2 = videos_col.update_one(
-#             {"_id": oid},
-#             {
-#                 "$push": {"viewers": new_viewer},
-#                 "$inc": {"unique_views": 1, "total_clicks": 1}
-#             }
-#         )
-#         if update_result2.matched_count == 0:
-#             return jsonify({"error": "video not found"}), 404
-#         first_time = True
-#     else:
-#         first_time = False
-#
-#     v = videos_col.find_one({"_id": oid}, {"viewers": 1, "unique_views": 1, "total_clicks":1})
-#     if not v:
-#         return jsonify({"error": "video not found after update"}), 404
-#
-#     return jsonify({
-#         "message": "click recorded",
-#         "first_time_for_ip": first_time,
-#         "unique_views": v.get("unique_views", 0),
-#         "total_clicks": v.get("total_clicks", 0),
-#         "viewer_preview": v.get("viewers", [])[:50]
-#     })
-#
-# # ────────────── Delete Video ──────────────
-# @app.route("/admin/video/<video_id>", methods=["DELETE"])
-# def delete_video(video_id):
-#     try:
-#         oid = ObjectId(video_id)
-#     except Exception:
-#         return jsonify({"error": "invalid video id"}), 400
-#     v = videos_col.find_one_and_delete({"_id": oid})
-#     if not v:
-#         return jsonify({"error": "video not found"}), 404
-#     filename = v.get("filename")
-#     if filename:
-#         try:
-#             os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-#         except FileNotFoundError:
-#             pass
-#     return jsonify({"message": "deleted", "id": video_id})
-#
-# # ────────────── Admin list full viewers ──────────────
-# @app.route("/admin/videos_with_viewers", methods=["GET"])
-# def admin_videos_with_viewers():
-#     vids = []
-#     for v in videos_col.find().sort("uploaded_at", -1):
-#         vids.append({
-#             "id": str(v["_id"]),
-#             "title": v.get("title"),
-#             "uploaded_at": v.get("uploaded_at"),
-#             "unique_views": v.get("unique_views", 0),
-#             "total_clicks": v.get("total_clicks", 0),
-#             "viewers": v.get("viewers", [])
-#         })
-#     return jsonify({"videos": vids})
-#
-# # ────────────── Healthcheck ──────────────
-# @app.route("/health", methods=["GET"])
-# def health():
-#     try:
-#         client.admin.command("ping")
-#         return jsonify({"status": "ok", "db": DB_NAME})
-#     except Exception as e:
-#         return jsonify({"status": "error", "error": str(e)}), 500
-#
-# if __name__ == "__main__":
-#     port = int(os.getenv("PORT", "5000"))
-#     debug = os.getenv("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
-#     app.run(host="0.0.0.0", port=8080, debug=debug)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 import os
 from datetime import datetime, timezone
@@ -363,7 +8,6 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from datetime import datetime
-
 
 # Load .env if present
 load_dotenv()
@@ -411,98 +55,6 @@ def uploaded_file(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
 # ────────────── Admin Edit Video ──────────────
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# @app.route("/admin/video/<video_id>", methods=["PATCH"])
-# def edit_video(video_id):
-#     try:
-#         oid = ObjectId(video_id)
-#     except Exception:
-#         return jsonify({"error": "invalid video id"}), 400
-#
-#     v = videos_col.find_one({"_id": oid})
-#     if not v:
-#         return jsonify({"error": "video not found"}), 404
-#
-#     new_title = (request.form.get("title") or "").strip() if request.form else None
-#     new_video_link = (request.form.get("video_link") or "").strip() if request.form else None
-#     new_subtitle_text = (request.form.get("subtitle") or "").strip() if request.form else None
-#
-#     update_fields = {}
-#
-#     if new_title:
-#         update_fields["title"] = new_title
-#     if new_video_link is not None and new_video_link != "":
-#         update_fields["video_link"] = new_video_link
-#     if new_subtitle_text is not None:
-#         update_fields["subtitle_text"] = new_subtitle_text
-#
-#     if "image" in request.files and request.files["image"].filename:
-#         img = request.files["image"]
-#         safe_img = secure_filename(img.filename)
-#         img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
-#         img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
-#         img.save(img_path)
-#         update_fields["image_filename"] = img_name
-#
-#     if not update_fields:
-#         return jsonify({"error": "no new data provided"}), 400
-#
-#     result = videos_col.update_one({"_id": oid}, {"$set": update_fields})
-#
-#     if result.matched_count == 0:
-#         return jsonify({"error": "video not found during update"}), 404
-#
-#     updated_doc = videos_col.find_one({"_id": oid})
-#
-#     image_url = None
-#     if updated_doc.get("image_filename"):
-#         image_url = f"{request.host_url}uploads/{updated_doc.get('image_filename')}"
-#
-#     return jsonify({
-#         "message": "video updated",
-#         "video": {
-#             "id": str(updated_doc["_id"]),
-#             "title": updated_doc.get("title"),
-#             "video_link": updated_doc.get("video_link"),
-#             "subtitle_text": updated_doc.get("subtitle_text"),
-#             "image_url": image_url,
-#             "original_filename": updated_doc.get("original_filename"),
-#             "uploaded_at": updated_doc.get("uploaded_at"),
-#             "unique_views": updated_doc.get("unique_views", 0),
-#             "total_clicks": updated_doc.get("total_clicks", 0)
-#         }
-#     })
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 @app.route("/admin/video/<video_id>", methods=["PATCH"])
 def edit_video(video_id):
@@ -619,15 +171,6 @@ def edit_video(video_id):
 
 # ────────────── Admin Upload Video ──────────────
 
-
-
-
-
-
-
-
-
-
 @app.route("/admin/upload_chunk", methods=["POST"])
 def upload_chunk():
     """
@@ -682,22 +225,6 @@ def upload_chunk():
         return jsonify({"message": "upload complete", "video_id": str(res.inserted_id)})
 
     return jsonify({"message": f"chunk {chunk_number}/{total_chunks} uploaded"})
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @app.route("/admin/upload", methods=["POST"])
@@ -782,44 +309,11 @@ def upload_video():
 
 
 
-# @app.route("/videos", methods=["GET"])
-# def list_videos():
-#     vids = []
-#     for v in videos_col.find().sort("uploaded_at", -1):
-#         video_id = str(v["_id"])
-#         video_url = None
-#         if v.get("filename"):
-#             video_url = f"{request.host_url}video/{video_id}/stream"
-#         image_url = None
-#         if v.get("image_filename"):
-#             image_url = f"{request.host_url}uploads/{v.get('image_filename')}"
-#         vids.append({
-#             "id": video_id,
-#             "title": v.get("title"),
-#             "original_filename": v.get("original_filename"),
-#             "uploaded_at": v.get("uploaded_at"),
-#             "unique_views": v.get("unique_views", 0),
-#             "total_clicks": v.get("total_clicks", 0),
-#             "video_url": video_url,
-#             "video_link": v.get("video_link"),
-#             "subtitle_text": v.get("subtitle_text"),
-#             "image_url": image_url,
-#             "viewers": v.get("viewers", [])
-#         })
-#     return jsonify({"videos": vids})
 
 
 
-
-
-
-
-
-
-
-
-
-
+# from datetime import datetime
+#
 # @app.route("/videos", methods=["GET"])
 # def list_videos():
 #     """
@@ -904,7 +398,8 @@ def upload_video():
 
 
 
-from datetime import datetime
+
+
 
 @app.route("/videos", methods=["GET"])
 def list_videos():
@@ -914,7 +409,6 @@ def list_videos():
       ?date=YYYY-MM-DD  অথবা
       ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
     """
-    # date range বের করি
     single_date = request.args.get("date")
     start_date = request.args.get("start_date")
     end_date = request.args.get("end_date")
@@ -939,14 +433,12 @@ def list_videos():
             return jsonify({"error": "Invalid start_date or end_date format. Use YYYY-MM-DD"}), 400
 
     vids = []
+    all_unique_ips = set()   # 🔹 নতুন যোগ করা হয়েছে
+
     for v in videos_col.find().sort("uploaded_at", -1):
         video_id = str(v["_id"])
-        video_url = None
-        if v.get("filename"):
-            video_url = f"{request.host_url}video/{video_id}/stream"
-        image_url = None
-        if v.get("image_filename"):
-            image_url = f"{request.host_url}uploads/{v.get('image_filename')}"
+        video_url = f"{request.host_url}video/{video_id}/stream" if v.get("filename") else None
+        image_url = f"{request.host_url}uploads/{v.get('image_filename')}" if v.get("image_filename") else None
 
         # ---- viewers ফিল্টার ----
         viewers = v.get("viewers", [])
@@ -954,12 +446,16 @@ def list_videos():
             filtered_viewers = []
             for viewer in viewers:
                 timestamps = viewer.get("timestamps", [])
-                # timestamps থেকে শুধু সেই তারিখেরগুলো নেব
                 filtered_ts = [ts for ts in timestamps if
                                date_filter_start.isoformat() <= ts <= date_filter_end.isoformat()]
                 if filtered_ts:
                     filtered_viewers.append({"ip": viewer.get("ip"), "timestamps": filtered_ts})
             viewers = filtered_viewers
+
+        # 🔹 এখানে সব ফিল্টারকৃত viewers এর unique ip সংগ্রহ করা হবে
+        for viewer in viewers:
+            if viewer.get("ip"):
+                all_unique_ips.add(viewer["ip"])
 
         vids.append({
             "id": video_id,
@@ -972,11 +468,14 @@ def list_videos():
             "video_link": v.get("video_link"),
             "subtitle_text": v.get("subtitle_text"),
             "image_url": image_url,
-            "viewers": viewers  # ফিল্টারকৃত viewers
+            "viewers": viewers
         })
-    return jsonify({"videos": vids})
 
-
+    # 🔹 নতুন parameter response এ যোগ করা হল
+    return jsonify({
+        "videos": vids,
+        "total_unique_ips": len(all_unique_ips)
+    })
 
 
 
