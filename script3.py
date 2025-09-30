@@ -370,6 +370,27 @@ def list_videos():
 
 
 
+# ────────────── Delete Image ──────────────
+@app.route("/admin/image/<image_id>", methods=["DELETE"])
+def delete_image(image_id):
+    try:
+        oid = ObjectId(image_id)
+    except Exception:
+        return jsonify({"error": "invalid image id"}), 400
+
+    img = images_col.find_one_and_delete({"_id": oid})
+    if not img:
+        return jsonify({"error": "image not found"}), 404
+
+    filename = img.get("filename")
+    if filename:
+        try:
+            os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+        except FileNotFoundError:
+            pass
+
+    return jsonify({"message": "image deleted", "id": image_id})
+
 
 
 # ────────────── Images Collection ──────────────
