@@ -366,10 +366,6 @@ def list_videos():
         "total_unique_ips": len(all_unique_ips)
     })
 
-
-
-
-
 # ────────────── Delete Image ──────────────
 @app.route("/admin/image/<image_id>", methods=["DELETE"])
 def delete_image(image_id):
@@ -460,6 +456,187 @@ def list_images():
 
 
 
+
+
+
+
+
+
+
+
+
+# ────────────── Keywords Collection ──────────────
+keywords_col = db.keywords
+
+
+# ────────────── Create Keyword ──────────────
+@app.route("/admin/keyword", methods=["POST"])
+def create_keyword():
+    """
+    form-data/json:
+      - keyword (string)
+    """
+    keyword = (request.form.get("keyword") or request.json.get("keyword") or "").strip()
+    if not keyword:
+        return jsonify({"error": "keyword required"}), 400
+
+    doc = {
+        "keyword": keyword,
+        "created_at": now_iso()
+    }
+    res = keywords_col.insert_one(doc)
+
+    return jsonify({
+        "message": "keyword created",
+        "keyword": {
+            "id": str(res.inserted_id),
+            "keyword": keyword
+        }
+    }), 201
+
+
+# ────────────── Get All Keywords ──────────────
+@app.route("/keywords", methods=["GET"])
+def list_keywords():
+    keywords = []
+    for k in keywords_col.find().sort("created_at", -1):
+        keywords.append({
+            "id": str(k["_id"]),
+            "keyword": k.get("keyword"),
+            "created_at": k.get("created_at")
+        })
+    return jsonify({"keywords": keywords})
+
+
+# ────────────── Get Single Keyword ──────────────
+@app.route("/keyword/<keyword_id>", methods=["GET"])
+def get_keyword(keyword_id):
+    try:
+        oid = ObjectId(keyword_id)
+    except Exception:
+        return jsonify({"error": "invalid keyword id"}), 400
+
+    k = keywords_col.find_one({"_id": oid})
+    if not k:
+        return jsonify({"error": "keyword not found"}), 404
+
+    return jsonify({
+        "id": str(k["_id"]),
+        "keyword": k.get("keyword"),
+        "created_at": k.get("created_at")
+    })
+
+
+# ────────────── Update Keyword ──────────────
+@app.route("/admin/keyword/<keyword_id>", methods=["PATCH"])
+def update_keyword(keyword_id):
+    try:
+        oid = ObjectId(keyword_id)
+    except Exception:
+        return jsonify({"error": "invalid keyword id"}), 400
+
+    new_keyword = (request.form.get("keyword") or request.json.get("keyword") or "").strip()
+    if not new_keyword:
+        return jsonify({"error": "keyword required"}), 400
+
+    res = keywords_col.update_one({"_id": oid}, {"$set": {"keyword": new_keyword}})
+    if res.matched_count == 0:
+        return jsonify({"error": "keyword not found"}), 404
+
+    updated_doc = keywords_col.find_one({"_id": oid})
+    return jsonify({
+        "message": "keyword updated",
+        "keyword": {
+            "id": str(updated_doc["_id"]),
+            "keyword": updated_doc.get("keyword")
+        }
+    })
+
+
+# ────────────── Delete Keyword ──────────────
+@app.route("/admin/keyword/<keyword_id>", methods=["DELETE"])
+def delete_keyword(keyword_id):
+    try:
+        oid = ObjectId(keyword_id)
+    except Exception:
+        return jsonify({"error": "invalid keyword id"}), 400
+
+    k = keywords_col.find_one_and_delete({"_id": oid})
+    if not k:
+        return jsonify({"error": "keyword not found"}), 404
+
+    return jsonify({"message": "keyword deleted", "id": keyword_id})
+
+
+
+
+
+
+
+
+
+
+
+
+# ────────────── Admin Update Uploaded Image ──────────────
+@app.route("/admin/upload_image/<image_id>", methods=["PATCH"])
+def update_uploaded_image(image_id):
+    """
+    আগে আপলোড করা image (images collection এ) আপডেট করবে।
+    আপডেট করা যাবে:
+      - title (text)
+      - image (file)
+    সবগুলো ফিল্ড optional; যেটা দিবে সেটাই আপডেট হবে।
+    """
+    try:
+        oid = ObjectId(image_id)
+    except Exception:
+        return jsonify({"error": "invalid image id"}), 400
+
+    img_doc = images_col.find_one({"_id": oid})
+    if not img_doc:
+        return jsonify({"error": "image not found"}), 404
+
+    update_fields = {}
+
+    # ---- টাইটেল আপডেট ----
+    new_title = (request.form.get("title") or "").strip() if request.form else None
+    if new_title:
+        update_fields["title"] = new_title
+
+    # ---- ইমেজ ফাইল আপডেট ----
+    if "image" in request.files and request.files["image"].filename:
+        img = request.files["image"]
+        safe_img = secure_filename(img.filename)
+        img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
+        img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
+        img.save(img_path)
+
+        # পুরনো ইমেজ থাকলে ফাইল সিস্টেম থেকে মুছে দাও
+        if img_doc.get("filename"):
+            old_img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_doc.get("filename"))
+            try:
+                os.remove(old_img_path)
+            except FileNotFoundError:
+                pass
+
+        update_fields["filename"] = img_name
+
+    if not update_fields:
+        return jsonify({"error": "no new data provided"}), 400
+
+    images_col.update_one({"_id": oid}, {"$set": update_fields})
+    updated_doc = images_col.find_one({"_id": oid})
+
+    return jsonify({
+        "message": "image updated",
+        "image": {
+            "id": str(updated_doc["_id"]),
+            "title": updated_doc.get("title"),
+            "url": f"{request.host_url}uploads/{updated_doc.get('filename')}",
+            "uploaded_at": updated_doc.get("uploaded_at")
+        }
+    })
 
 
 
