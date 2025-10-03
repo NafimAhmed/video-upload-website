@@ -741,6 +741,7 @@ def video_click(video_id):
 @app.route("/admin/video/<video_id>", methods=["DELETE"])
 def delete_video(video_id):
     try:
+
         oid = ObjectId(video_id)
     except Exception:
         return jsonify({"error": "invalid video id"}), 400
