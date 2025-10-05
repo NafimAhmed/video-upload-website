@@ -519,6 +519,92 @@ def list_images():
 
 
 
+# @app.route("/admin/upload_image", methods=["POST"])
+# def upload_image():
+#     """
+#     শুধু ইমেজ আপলোড করতে।
+#     form-data:
+#       - image (file)
+#       - title (optional)
+#       - index_number (optional integer/string)
+#       - site_name (string)
+#       - site_url (string)
+#       - registration_information (string)
+#       - domain_name (string)
+#       - copyright_info (string)
+#     """
+#     if "image" not in request.files or not request.files["image"].filename:
+#         return jsonify({"error": "no image file provided"}), 400
+#
+#     img = request.files["image"]
+#     safe_img = secure_filename(img.filename)
+#     img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
+#     img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
+#     img.save(img_path)
+#
+#     # ---------- মূল ফিল্ডগুলো ----------
+#     title = (request.form.get("title") or "").strip() or ""#safe_img
+#     index_number = (request.form.get("index_number") or "").strip()
+#     original_filename = safe_img
+#
+#     # ---------- নতুন ফিল্ডগুলো ----------
+#     site_name = (request.form.get("site_name") or "").strip()
+#     site_url = (request.form.get("site_url") or "").strip()
+#     registration_information = (request.form.get("registration_information") or "").strip()
+#     domain_name = (request.form.get("domain_name") or "").strip()
+#     copyright_info = (request.form.get("copyright_info") or "").strip()
+#
+#     # ---------- MongoDB তে সেভ ----------
+#     doc = {
+#         "title": title,
+#         "filename": img_name,
+#         "original_filename": original_filename,
+#         "index_number": index_number,
+#         "uploaded_at": now_iso(),
+#         # নতুন ফিল্ড যোগ
+#         "site_name": site_name,
+#         "site_url": site_url,
+#         "registration_information": registration_information,
+#         "domain_name": domain_name,
+#         "copyright_info": copyright_info
+#     }
+#     res = images_col.insert_one(doc)
+#
+#     # ---------- Response ----------
+#     return jsonify({
+#         "message": "image uploaded",
+#         "image": {
+#             "id": str(res.inserted_id),
+#             "title": title,
+#             "original_filename": original_filename,
+#             "index_number": index_number,
+#             "url": f"{request.host_url}uploads/{img_name}",
+#             "site_name": site_name,
+#             "site_url": site_url,
+#             "registration_information": registration_information,
+#             "domain_name": domain_name,
+#             "copyright_info": copyright_info
+#         }
+#     }), 201
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route("/admin/upload_image", methods=["POST"])
 def upload_image():
     """
@@ -533,17 +619,23 @@ def upload_image():
       - domain_name (string)
       - copyright_info (string)
     """
+    # ---------- ইমেজ ফাইল চেক ----------
     if "image" not in request.files or not request.files["image"].filename:
         return jsonify({"error": "no image file provided"}), 400
 
     img = request.files["image"]
     safe_img = secure_filename(img.filename)
+
+    # ফাইল নাম তৈরি
     img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
     img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
     img.save(img_path)
 
     # ---------- মূল ফিল্ডগুলো ----------
-    title = (request.form.get("title") or "").strip() or safe_img
+    title = (request.form.get("title") or "").strip()
+    if not title:
+        title = safe_img  # fallback if title not provided
+
     index_number = (request.form.get("index_number") or "").strip()
     original_filename = safe_img
 
@@ -561,7 +653,6 @@ def upload_image():
         "original_filename": original_filename,
         "index_number": index_number,
         "uploaded_at": now_iso(),
-        # নতুন ফিল্ড যোগ
         "site_name": site_name,
         "site_url": site_url,
         "registration_information": registration_information,
@@ -572,13 +663,13 @@ def upload_image():
 
     # ---------- Response ----------
     return jsonify({
-        "message": "image uploaded",
+        "message": "✅ image uploaded successfully",
         "image": {
             "id": str(res.inserted_id),
             "title": title,
             "original_filename": original_filename,
             "index_number": index_number,
-            "url": f"{request.host_url}uploads/{img_name}",
+            "url": f"{request.host_url.rstrip('/')}/uploads/{img_name}",
             "site_name": site_name,
             "site_url": site_url,
             "registration_information": registration_information,
@@ -586,8 +677,6 @@ def upload_image():
             "copyright_info": copyright_info
         }
     }), 201
-
-
 
 
 
@@ -1222,6 +1311,156 @@ def health():
 
 
 
+
+
+
+banner_col = db.banner_images
+
+@app.route("/admin/banner/upload", methods=["POST"])
+def upload_banner_image():
+    """
+    form-data:
+      - image (file)
+      - title (optional)
+      - banner_type: "header" বা "footer" (required)
+      - index_number (optional)
+    """
+    if "image" not in request.files or not request.files["image"].filename:
+        return jsonify({"error": "no image file provided"}), 400
+
+    banner_type = (request.form.get("banner_type") or "").strip().lower()
+    if banner_type not in ["header", "footer"]:
+        return jsonify({"error": "banner_type must be 'header' or 'footer'"}), 400
+
+    # image file process
+    image = request.files["image"]
+    safe_name = secure_filename(image.filename)
+    unique_name = f"banner_{banner_type}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_name}"
+    save_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_name)
+    image.save(save_path)
+
+    title = (request.form.get("title") or "").strip() or safe_name
+    index_number = (request.form.get("index_number") or "").strip()
+
+    doc = {
+        "title": title,
+        "banner_type": banner_type,
+        "index_number": index_number,
+        "filename": unique_name,
+        "original_filename": safe_name,
+        "uploaded_at": now_iso()
+    }
+
+    res = banner_col.insert_one(doc)
+
+    return jsonify({
+        "message": "banner uploaded successfully",
+        "banner": {
+            "id": str(res.inserted_id),
+            "title": title,
+            "banner_type": banner_type,
+            "index_number": index_number,
+            "url": f"{request.host_url}uploads/{unique_name}"
+        }
+    }), 201
+
+
+
+
+
+
+
+
+@app.route("/banners", methods=["GET"])
+def get_banners():
+    """
+    সব banner show করবে।
+    optional query: ?type=header বা ?type=footer
+    """
+    banner_type = request.args.get("type")
+    query = {}
+    if banner_type:
+        query["banner_type"] = banner_type.lower()
+
+    banners = []
+    for b in banner_col.find(query).sort("uploaded_at", -1):
+        banners.append({
+            "id": str(b["_id"]),
+            "title": b.get("title"),
+            "banner_type": b.get("banner_type"),
+            "index_number": b.get("index_number"),
+            "original_filename": b.get("original_filename"),
+            "uploaded_at": b.get("uploaded_at"),
+            "url": f"{request.host_url}uploads/{b.get('filename')}"
+        })
+
+    return jsonify({"banners": banners})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@app.route("/banners", methods=["GET"])
+def list_banner_images():   # আগের get_banners → list_banner_images
+    banner_type = request.args.get("type")
+    query = {}
+    if banner_type:
+        query["banner_type"] = banner_type.lower()
+
+    banners = []
+    for b in banner_col.find(query).sort("uploaded_at", -1):
+        banners.append({
+            "id": str(b["_id"]),
+            "title": b.get("title"),
+            "banner_type": b.get("banner_type"),
+            "index_number": b.get("index_number"),
+            "original_filename": b.get("original_filename"),
+            "uploaded_at": b.get("uploaded_at"),
+            "url": f"{request.host_url}uploads/{b.get('filename')}"
+        })
+
+    return jsonify({"banners": banners})
+
+
+
+
+
+
+
+
+
+@app.route("/admin/banner/<banner_id>", methods=["DELETE"])
+def delete_banner_image(banner_id):
+    """
+    নির্দিষ্ট banner মুছে ফেলা হবে
+    """
+    try:
+        oid = ObjectId(banner_id)
+    except Exception:
+        return jsonify({"error": "invalid banner id"}), 400
+
+    banner = banner_col.find_one_and_delete({"_id": oid})
+    if not banner:
+        return jsonify({"error": "banner not found"}), 404
+
+    filename = banner.get("filename")
+    if filename:
+        try:
+            os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+        except FileNotFoundError:
+            pass
+
+    return jsonify({"message": f"{banner.get('banner_type', 'banner')} deleted", "id": banner_id})
 
 
 
