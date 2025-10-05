@@ -8,6 +8,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from datetime import datetime
+from flask import Flask, request, jsonify, send_from_directory, session, g
 
 # Load .env if present
 load_dotenv()
@@ -394,55 +395,114 @@ images_col = db.images
 
 
 # ────────────── Admin Upload Image ──────────────
-@app.route("/admin/upload_image", methods=["POST"])
-def upload_image():
-    """
-    শুধু ইমেজ আপলোড করতে।
-    form-data:
-      - image (file)
-      - title (optional)
-    """
-    if "image" not in request.files or not request.files["image"].filename:
-        return jsonify({"error": "no image file provided"}), 400
 
-    img = request.files["image"]
-    safe_img = secure_filename(img.filename)
-    img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
-    img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
-    img.save(img_path)
 
-    title = (request.form.get("title") or "").strip() or safe_img
 
-    doc = {
-        "title": title,
-        "filename": img_name,
-        "uploaded_at": now_iso()
-    }
-    res = images_col.insert_one(doc)
 
-    return jsonify({
-        "message": "image uploaded",
-        "image": {
-            "id": str(res.inserted_id),
-            "title": title,
-            "url": f"{request.host_url}uploads/{img_name}"
-        }
-    }), 201
+
+
+
+
+
+# @app.route("/admin/upload_image", methods=["POST"])
+# def upload_image():
+#     """
+#     শুধু ইমেজ আপলোড করতে।
+#     form-data:
+#       - image (file)
+#       - title (optional)
+#     """
+#     if "image" not in request.files or not request.files["image"].filename:
+#         return jsonify({"error": "no image file provided"}), 400
+#
+#     img = request.files["image"]
+#     safe_img = secure_filename(img.filename)
+#     img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
+#     img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
+#     img.save(img_path)
+#
+#     title = (request.form.get("title") or "").strip() or safe_img
+#
+#     doc = {
+#         "title": title,
+#         "filename": img_name,
+#         "uploaded_at": now_iso()
+#     }
+#     res = images_col.insert_one(doc)
+#
+#     return jsonify({
+#         "message": "image uploaded",
+#         "image": {
+#             "id": str(res.inserted_id),
+#             "title": title,
+#             "url": f"{request.host_url}uploads/{img_name}"
+#         }
+#     }), 201
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ────────────── Images List ──────────────
+# @app.route("/images", methods=["GET"])
+# def list_images():
+#     """
+#     সব ইমেজ লিস্ট করবে
+#     """
+#     imgs = []
+#     for img in images_col.find().sort("uploaded_at", -1):
+#         imgs.append({
+#             "id": str(img["_id"]),
+#             "title": img.get("title"),
+#             "uploaded_at": img.get("uploaded_at"),
+#             "url": f"{request.host_url}uploads/{img.get('filename')}"
+#         })
+#     return jsonify({"images": imgs})
+
+
+
+
+
+
+
+
 @app.route("/images", methods=["GET"])
 def list_images():
     """
-    সব ইমেজ লিস্ট করবে
+    সব ইমেজ লিস্ট করবে — প্রতিটা রেকর্ডে থাকবে:
+    id, title, original_filename, index_number,
+    site_name, site_url, registration_information,
+    domain_name, copyright
     """
     imgs = []
     for img in images_col.find().sort("uploaded_at", -1):
         imgs.append({
             "id": str(img["_id"]),
             "title": img.get("title"),
+            "original_filename": img.get("original_filename"),
+            "index_number": img.get("index_number"),
             "uploaded_at": img.get("uploaded_at"),
-            "url": f"{request.host_url}uploads/{img.get('filename')}"
+            "url": f"{request.host_url}uploads/{img.get('filename')}",
+            "site_name": img.get("site_name"),
+            "site_url": img.get("site_url"),
+            "registration_information": img.get("registration_information"),
+            "domain_name": img.get("domain_name"),
+            "copyright_info": img.get("copyright_info")
         })
     return jsonify({"images": imgs})
 
@@ -457,6 +517,75 @@ def list_images():
 
 
 
+
+
+@app.route("/admin/upload_image", methods=["POST"])
+def upload_image():
+    """
+    শুধু ইমেজ আপলোড করতে।
+    form-data:
+      - image (file)
+      - title (optional)
+      - index_number (optional integer/string)
+      - site_name (string)
+      - site_url (string)
+      - registration_information (string)
+      - domain_name (string)
+      - copyright_info (string)
+    """
+    if "image" not in request.files or not request.files["image"].filename:
+        return jsonify({"error": "no image file provided"}), 400
+
+    img = request.files["image"]
+    safe_img = secure_filename(img.filename)
+    img_name = f"img_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
+    img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
+    img.save(img_path)
+
+    # ---------- মূল ফিল্ডগুলো ----------
+    title = (request.form.get("title") or "").strip() or safe_img
+    index_number = (request.form.get("index_number") or "").strip()
+    original_filename = safe_img
+
+    # ---------- নতুন ফিল্ডগুলো ----------
+    site_name = (request.form.get("site_name") or "").strip()
+    site_url = (request.form.get("site_url") or "").strip()
+    registration_information = (request.form.get("registration_information") or "").strip()
+    domain_name = (request.form.get("domain_name") or "").strip()
+    copyright_info = (request.form.get("copyright_info") or "").strip()
+
+    # ---------- MongoDB তে সেভ ----------
+    doc = {
+        "title": title,
+        "filename": img_name,
+        "original_filename": original_filename,
+        "index_number": index_number,
+        "uploaded_at": now_iso(),
+        # নতুন ফিল্ড যোগ
+        "site_name": site_name,
+        "site_url": site_url,
+        "registration_information": registration_information,
+        "domain_name": domain_name,
+        "copyright_info": copyright_info
+    }
+    res = images_col.insert_one(doc)
+
+    # ---------- Response ----------
+    return jsonify({
+        "message": "image uploaded",
+        "image": {
+            "id": str(res.inserted_id),
+            "title": title,
+            "original_filename": original_filename,
+            "index_number": index_number,
+            "url": f"{request.host_url}uploads/{img_name}",
+            "site_name": site_name,
+            "site_url": site_url,
+            "registration_information": registration_information,
+            "domain_name": domain_name,
+            "copyright_info": copyright_info
+        }
+    }), 201
 
 
 
@@ -639,12 +768,197 @@ def update_uploaded_image(image_id):
     })
 
 
+#########################################################################
+
+users_col = db.users
+
+
+@app.route("/auth/register", methods=["POST"])
+def register():
+    """
+    JSON form:
+      {
+        "username": "testuser",
+        "email": "test@example.com",
+        "password": "123456",
+        "role": "admin" | "user" (optional)
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip().lower()
+    email = (data.get("email") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+    role = (data.get("role") or "user").strip().lower()
+
+    if not username or not email or not password:
+        return jsonify({"error": "username, email, password required"}), 400
+
+    if users_col.find_one({"$or": [{"username": username}, {"email": email}]}):
+        return jsonify({"error": "username or email already exists"}), 409
+
+    user_doc = {
+        "username": username,
+        "email": email,
+        "password": password,  # plain text (simple)
+        "role": role,
+        "created_at": now_iso(),
+        "last_login_at": None
+    }
+    res = users_col.insert_one(user_doc)
+
+    session["user_id"] = str(res.inserted_id)
+    session["username"] = username
+    session["role"] = role
+
+    return jsonify({
+        "message": "registered successfully",
+        "user": {
+            "id": str(res.inserted_id),
+            "username": username,
+            "email": email,
+            "role": role
+        }
+    }), 201
+
+
+
+
+
+@app.route("/auth/login", methods=["POST"])
+def login():
+    """
+    JSON form:
+      {
+        "username": "testuser",
+        "password": "123456"
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+
+    if not username or not password:
+        return jsonify({"error": "username and password required"}), 400
+
+    user = users_col.find_one({"username": username})
+    if not user or user.get("password") != password:
+        return jsonify({"error": "invalid username or password"}), 401
+
+    session["user_id"] = str(user["_id"])
+    session["username"] = user.get("username")
+    session["role"] = user.get("role", "user")
+
+    users_col.update_one({"_id": user["_id"]}, {"$set": {"last_login_at": now_iso()}})
+
+    return jsonify({
+        "message": "login successful",
+        "user": {
+            "id": str(user["_id"]),
+            "username": user.get("username"),
+            "email": user.get("email"),
+            "role": user.get("role")
+        }
+    })
 
 
 
 
 
 
+
+@app.route("/auth/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"message": "logged out successfully"})
+
+
+
+
+
+@app.route("/auth/me", methods=["GET"])
+def me():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"authenticated": False})
+
+    u = users_col.find_one({"_id": ObjectId(user_id)})
+    if not u:
+        return jsonify({"authenticated": False})
+
+    return jsonify({
+        "authenticated": True,
+        "user": {
+            "id": str(u["_id"]),
+            "username": u.get("username"),
+            "email": u.get("email"),
+            "role": u.get("role"),
+            "created_at": u.get("created_at"),
+            "last_login_at": u.get("last_login_at")
+        }
+    })
+
+
+
+
+
+
+@app.route("/admin/user/<user_id>/role", methods=["PATCH"])
+def update_user_role(user_id):
+    """
+    কেবল admin ইউজাররা অন্য ইউজারের role পরিবর্তন করতে পারবে।
+    form-data বা JSON:
+      {
+        "new_role": "admin" | "user"
+      }
+    """
+    # --- প্রথমে লগইন আছে কিনা চেক করো ---
+    current_role = session.get("role")
+    if not current_role:
+        return jsonify({"error": "login required"}), 401
+
+    # --- admin না হলে অনুমতি নাই ---
+    if current_role != "admin":
+        return jsonify({"error": "only admin can update roles"}), 403
+
+    # --- ইনপুট নাও ---
+    data = request.get_json(silent=True) or request.form
+    new_role = (data.get("new_role") or "").strip().lower()
+
+    if new_role not in ("admin", "user"):
+        return jsonify({"error": "invalid role, must be 'admin' or 'user'"}), 400
+
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        return jsonify({"error": "invalid user id"}), 400
+
+    user = users_col.find_one({"_id": oid})
+    if not user:
+        return jsonify({"error": "user not found"}), 404
+
+    # --- নিজের role নিজে পরিবর্তন করতে না পারে ---
+    if str(user["_id"]) == session.get("user_id"):
+        return jsonify({"error": "cannot change your own role"}), 400
+
+    # --- MongoDB তে আপডেট ---
+    users_col.update_one({"_id": oid}, {"$set": {"role": new_role}})
+
+    return jsonify({
+        "message": "user role updated",
+        "user": {
+            "id": str(user["_id"]),
+            "username": user.get("username"),
+            "email": user.get("email"),
+            "new_role": new_role
+        }
+    })
+
+
+
+
+
+
+########################################################################
 
 # ────────────── Video detail ──────────────
 @app.route("/video/<video_id>", methods=["GET"])
@@ -779,6 +1093,145 @@ def health():
         return jsonify({"status": "ok", "db": DB_NAME})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # =====================================================
+    # 📂 BANNER IMAGE (Header & Footer)
+    # =====================================================
+
+    banner_images_col = db.banner_images  # নতুন collection
+
+    # ────────────── Upload Banner ──────────────
+    @app.route("/admin/upload_banner", methods=["POST"])
+    def upload_banner():
+        """
+        form-data:
+          - image (file)
+          - title (optional)
+          - banner_type (header/footer)
+          - index_number (optional)
+        """
+        if "image" not in request.files or not request.files["image"].filename:
+            return jsonify({"error": "no image file provided"}), 400
+
+        banner_type = (request.form.get("banner_type") or "").strip().lower()
+        if banner_type not in ["header", "footer"]:
+            return jsonify({"error": "invalid banner_type, must be 'header' or 'footer'"}), 400
+
+        img = request.files["image"]
+        safe_img = secure_filename(img.filename)
+        img_name = f"banner_{banner_type}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{safe_img}"
+        img_path = os.path.join(app.config["UPLOAD_FOLDER"], img_name)
+        img.save(img_path)
+
+        title = (request.form.get("title") or "").strip() or safe_img
+        index_number = (request.form.get("index_number") or "").strip()
+        original_filename = safe_img
+
+        doc = {
+            "title": title,
+            "filename": img_name,
+            "original_filename": original_filename,
+            "banner_type": banner_type,
+            "index_number": index_number,
+            "uploaded_at": now_iso()
+        }
+        res = banner_images_col.insert_one(doc)
+
+        return jsonify({
+            "message": f"{banner_type} banner uploaded",
+            "banner": {
+                "id": str(res.inserted_id),
+                "title": title,
+                "banner_type": banner_type,
+                "original_filename": original_filename,
+                "index_number": index_number,
+                "url": f"{request.host_url}uploads/{img_name}"
+            }
+        }), 201
+
+    # ────────────── Get All Banners ──────────────
+    @app.route("/banners", methods=["GET"])
+    def list_banners():
+        """
+        সব header এবং footer banner রিটার্ন করবে
+        optional query param: ?type=header OR ?type=footer
+        """
+        banner_type = request.args.get("type")
+        q = {}
+        if banner_type:
+            q["banner_type"] = banner_type.lower()
+
+        banners = []
+        for b in banner_images_col.find(q).sort("uploaded_at", -1):
+            banners.append({
+                "id": str(b["_id"]),
+                "title": b.get("title"),
+                "banner_type": b.get("banner_type"),
+                "original_filename": b.get("original_filename"),
+                "index_number": b.get("index_number"),
+                "uploaded_at": b.get("uploaded_at"),
+                "url": f"{request.host_url}uploads/{b.get('filename')}"
+            })
+
+        return jsonify({"banners": banners})
+
+    # ────────────── Delete Banner ──────────────
+    @app.route("/admin/banner/<banner_id>", methods=["DELETE"])
+    def delete_banner(banner_id):
+        try:
+            oid = ObjectId(banner_id)
+        except Exception:
+            return jsonify({"error": "invalid banner id"}), 400
+
+        b = banner_images_col.find_one_and_delete({"_id": oid})
+        if not b:
+            return jsonify({"error": "banner not found"}), 404
+
+        filename = b.get("filename")
+        if filename:
+            try:
+                os.remove(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+            except FileNotFoundError:
+                pass
+
+        return jsonify({
+            "message": f"{b.get('banner_type', 'banner')} deleted",
+            "id": banner_id
+        })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
