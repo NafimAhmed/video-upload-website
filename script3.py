@@ -9,7 +9,8 @@ from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, session, g
-
+from pymongo import ASCENDING, DESCENDING
+from bson.regex import Regex
 # Load .env if present
 load_dotenv()
 
@@ -1184,17 +1185,6 @@ def health():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
-
-
-
-
-
-
-
-
-
-
-
     # =====================================================
     # 📂 BANNER IMAGE (Header & Footer)
     # =====================================================
@@ -1439,6 +1429,497 @@ def list_banner_images():   # আগের get_banners → list_banner_images
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+# =====================================================
+# 📂 CATEGORY MANAGEMENT
+# =====================================================
+
+categories_col = db.categories
+
+
+# ────────────── Create Category ──────────────
+@app.route("/admin/category", methods=["POST"])
+def create_category():
+    """
+    form-data / JSON:
+      - name (string)
+      - description (optional)
+    """
+    data = request.get_json(silent=True) or request.form
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+
+    if not name:
+        return jsonify({"error": "category name required"}), 400
+
+    # Duplicate check
+    if categories_col.find_one({"name": name}):
+        return jsonify({"error": "category name already exists"}), 409
+
+    doc = {
+        "name": name,
+        "description": description,
+        "created_at": now_iso(),
+        "updated_at": None
+    }
+    res = categories_col.insert_one(doc)
+
+    return jsonify({
+        "message": "category created",
+        "category": {
+            "id": str(res.inserted_id),
+            "name": name,
+            "description": description
+        }
+    }), 201
+
+
+# ────────────── Get All Categories ──────────────
+
+
+
+
+
+
+
+
+
+
+
+
+# @app.route("/categories", methods=["GET"])
+# def list_categories():
+#     categories = []
+#     for c in categories_col.find().sort("created_at", -1):
+#         categories.append({
+#             "id": str(c["_id"]),
+#             "name": c.get("name"),
+#             "description": c.get("description"),
+#             "created_at": c.get("created_at"),
+#             "updated_at": c.get("updated_at")
+#         })
+#     return jsonify({"categories": categories})
+
+
+
+# ────────────── Get All Categories (with Subcategories) ──────────────
+@app.route("/categories", methods=["GET"])
+def list_categories_with_subcategories():
+    """
+    সব category দেখাবে এবং প্রতিটির নিচে তার subcategories list থাকবে
+    """
+    categories = []
+
+    # সব category বের করো
+    for c in categories_col.find().sort("created_at", -1):
+        cat_id_str = str(c["_id"])
+
+        # ঐ category এর subcategories গুলো আনো
+        subcats = []
+        for s in subcategories_col.find({"category_id": cat_id_str}).sort("created_at", -1):
+            subcats.append({
+                "id": str(s["_id"]),
+                "name": s.get("name"),
+                "description": s.get("description"),
+                "created_at": s.get("created_at"),
+                "updated_at": s.get("updated_at")
+            })
+
+        # এখন পুরো category + subcategory list তৈরি করো
+        categories.append({
+            "id": cat_id_str,
+            "name": c.get("name"),
+            "description": c.get("description"),
+            "created_at": c.get("created_at"),
+            "updated_at": c.get("updated_at"),
+            "subcategories": subcats
+        })
+
+    return jsonify({"categories": categories})
+
+
+
+
+
+
+
+
+
+
+# ────────────── Get Single Category ──────────────
+@app.route("/category/<category_id>", methods=["GET"])
+def get_category(category_id):
+    try:
+        oid = ObjectId(category_id)
+    except Exception:
+        return jsonify({"error": "invalid category id"}), 400
+
+    c = categories_col.find_one({"_id": oid})
+    if not c:
+        return jsonify({"error": "category not found"}), 404
+
+    return jsonify({
+        "id": str(c["_id"]),
+        "name": c.get("name"),
+        "description": c.get("description"),
+        "created_at": c.get("created_at"),
+        "updated_at": c.get("updated_at")
+    })
+
+
+# ────────────── Update Category ──────────────
+@app.route("/admin/category/<category_id>", methods=["PATCH"])
+def update_category(category_id):
+    try:
+        oid = ObjectId(category_id)
+    except Exception:
+        return jsonify({"error": "invalid category id"}), 400
+
+    data = request.get_json(silent=True) or request.form
+    new_name = (data.get("name") or "").strip()
+    new_description = (data.get("description") or "").strip()
+
+    update_fields = {}
+    if new_name:
+        update_fields["name"] = new_name
+    if new_description:
+        update_fields["description"] = new_description
+
+    if not update_fields:
+        return jsonify({"error": "no new data provided"}), 400
+
+    update_fields["updated_at"] = now_iso()
+
+    res = categories_col.update_one({"_id": oid}, {"$set": update_fields})
+    if res.matched_count == 0:
+        return jsonify({"error": "category not found"}), 404
+
+    updated_doc = categories_col.find_one({"_id": oid})
+    return jsonify({
+        "message": "category updated",
+        "category": {
+            "id": str(updated_doc["_id"]),
+            "name": updated_doc.get("name"),
+            "description": updated_doc.get("description"),
+            "created_at": updated_doc.get("created_at"),
+            "updated_at": updated_doc.get("updated_at")
+        }
+    })
+
+
+# ────────────── Delete Category ──────────────
+@app.route("/admin/category/<category_id>", methods=["DELETE"])
+def delete_category(category_id):
+    try:
+        oid = ObjectId(category_id)
+    except Exception:
+        return jsonify({"error": "invalid category id"}), 400
+
+    c = categories_col.find_one_and_delete({"_id": oid})
+    if not c:
+        return jsonify({"error": "category not found"}), 404
+
+    return jsonify({"message": "category deleted", "id": category_id})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# =====================================================
+# 📂 SUBCATEGORY MANAGEMENT (belongs to Category)
+# =====================================================
+
+subcategories_col = db.subcategories
+
+
+# ────────────── Create Subcategory ──────────────
+@app.route("/admin/subcategory", methods=["POST"])
+def create_subcategory():
+    """
+    form-data / JSON:
+      - category_id (string, required)
+      - name (string, required)
+      - description (optional)
+    """
+    data = request.get_json(silent=True) or request.form
+    category_id = (data.get("category_id") or "").strip()
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+
+    if not category_id or not name:
+        return jsonify({"error": "category_id and name required"}), 400
+
+    # category_id valid কিনা চেক করো
+    try:
+        cat_oid = ObjectId(category_id)
+    except Exception:
+        return jsonify({"error": "invalid category_id"}), 400
+
+    category = categories_col.find_one({"_id": cat_oid})
+    if not category:
+        return jsonify({"error": "category not found"}), 404
+
+    # Duplicate চেক (একই category তে একই নাম না থাকে)
+    if subcategories_col.find_one({"category_id": category_id, "name": name}):
+        return jsonify({"error": "subcategory already exists in this category"}), 409
+
+    doc = {
+        "category_id": category_id,
+        "name": name,
+        "description": description,
+        "created_at": now_iso(),
+        "updated_at": None
+    }
+    res = subcategories_col.insert_one(doc)
+
+    return jsonify({
+        "message": "subcategory created",
+        "subcategory": {
+            "id": str(res.inserted_id),
+            "category_id": category_id,
+            "name": name,
+            "description": description
+        }
+    }), 201
+
+
+# ────────────── Get All Subcategories ──────────────
+@app.route("/subcategories", methods=["GET"])
+def list_subcategories():
+    """
+    optional query param:
+      ?category_id=<id> → নির্দিষ্ট category এর subcategory গুলোই দেখাবে
+    """
+    category_id = request.args.get("category_id")
+    query = {}
+    if category_id:
+        query["category_id"] = category_id
+
+    subcats = []
+    for s in subcategories_col.find(query).sort("created_at", -1):
+        subcats.append({
+            "id": str(s["_id"]),
+            "category_id": s.get("category_id"),
+            "name": s.get("name"),
+            "description": s.get("description"),
+            "created_at": s.get("created_at"),
+            "updated_at": s.get("updated_at")
+        })
+
+    return jsonify({"subcategories": subcats})
+
+
+# ────────────── Get Single Subcategory ──────────────
+@app.route("/subcategory/<subcategory_id>", methods=["GET"])
+def get_subcategory(subcategory_id):
+    try:
+        oid = ObjectId(subcategory_id)
+    except Exception:
+        return jsonify({"error": "invalid subcategory id"}), 400
+
+    s = subcategories_col.find_one({"_id": oid})
+    if not s:
+        return jsonify({"error": "subcategory not found"}), 404
+
+    return jsonify({
+        "id": str(s["_id"]),
+        "category_id": s.get("category_id"),
+        "name": s.get("name"),
+        "description": s.get("description"),
+        "created_at": s.get("created_at"),
+        "updated_at": s.get("updated_at")
+    })
+
+
+# ────────────── Update Subcategory ──────────────
+@app.route("/admin/subcategory/<subcategory_id>", methods=["PATCH"])
+def update_subcategory(subcategory_id):
+    try:
+        oid = ObjectId(subcategory_id)
+    except Exception:
+        return jsonify({"error": "invalid subcategory id"}), 400
+
+    data = request.get_json(silent=True) or request.form
+    new_name = (data.get("name") or "").strip()
+    new_description = (data.get("description") or "").strip()
+
+    update_fields = {}
+    if new_name:
+        update_fields["name"] = new_name
+    if new_description:
+        update_fields["description"] = new_description
+
+    if not update_fields:
+        return jsonify({"error": "no new data provided"}), 400
+
+    update_fields["updated_at"] = now_iso()
+
+    res = subcategories_col.update_one({"_id": oid}, {"$set": update_fields})
+    if res.matched_count == 0:
+        return jsonify({"error": "subcategory not found"}), 404
+
+    updated_doc = subcategories_col.find_one({"_id": oid})
+    return jsonify({
+        "message": "subcategory updated",
+        "subcategory": {
+            "id": str(updated_doc["_id"]),
+            "category_id": updated_doc.get("category_id"),
+            "name": updated_doc.get("name"),
+            "description": updated_doc.get("description"),
+            "created_at": updated_doc.get("created_at"),
+            "updated_at": updated_doc.get("updated_at")
+        }
+    })
+
+
+# ────────────── Delete Subcategory ──────────────
+@app.route("/admin/subcategory/<subcategory_id>", methods=["DELETE"])
+def delete_subcategory(subcategory_id):
+    try:
+        oid = ObjectId(subcategory_id)
+    except Exception:
+        return jsonify({"error": "invalid subcategory id"}), 400
+
+    s = subcategories_col.find_one_and_delete({"_id": oid})
+    if not s:
+        return jsonify({"error": "subcategory not found"}), 404
+
+    return jsonify({"message": "subcategory deleted", "id": subcategory_id})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@app.route("/search/videos", methods=["GET"])
+def search_videos():
+    """
+    🔍 Search videos by keyword in title, video_link, or subtitle_text.
+    Example:
+      /search/videos?q=cat
+    Optional filters:
+      ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+    """
+    query_text = (request.args.get("q") or "").strip()
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+
+    # ---- Base query ----
+    mongo_query = {}
+
+    # ---- Keyword search ----
+    if query_text:
+        # Case-insensitive partial match
+        regex = Regex(query_text, "i")
+        mongo_query["$or"] = [
+            {"title": regex},
+            {"video_link": regex},
+            {"subtitle_text": regex}
+        ]
+
+    # ---- Optional date filter ----
+    if start_date and end_date:
+        try:
+            start = datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0)
+            end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59)
+            mongo_query["uploaded_at"] = {"$gte": start.isoformat(), "$lte": end.isoformat()}
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+
+    # ---- Execute query ----
+    results = []
+    for v in videos_col.find(mongo_query).sort("uploaded_at", DESCENDING):
+        video_id = str(v["_id"])
+        video_url = f"{request.host_url}video/{video_id}/stream" if v.get("filename") else None
+        image_url = f"{request.host_url}uploads/{v.get('image_filename')}" if v.get("image_filename") else None
+
+        results.append({
+            "id": video_id,
+            "title": v.get("title"),
+            "original_filename": v.get("original_filename"),
+            "uploaded_at": v.get("uploaded_at"),
+            "video_link": v.get("video_link"),
+            "subtitle_text": v.get("subtitle_text"),
+            "unique_views": v.get("unique_views", 0),
+            "total_clicks": v.get("total_clicks", 0),
+            "video_url": video_url,
+            "image_url": image_url
+        })
+
+    return jsonify({
+        "query": query_text,
+        "count": len(results),
+        "videos": results
+    })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route("/admin/banner/<banner_id>", methods=["DELETE"])
 def delete_banner_image(banner_id):
     """
@@ -1461,15 +1942,6 @@ def delete_banner_image(banner_id):
             pass
 
     return jsonify({"message": f"{banner.get('banner_type', 'banner')} deleted", "id": banner_id})
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":
