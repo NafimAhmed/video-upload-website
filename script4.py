@@ -4,7 +4,6 @@ import shutil
 import asyncio
 import time
 import sqlite3
-import uuid
 from flask import Flask, request, jsonify, redirect, send_file
 from telethon import TelegramClient
 from telethon.errors import (
@@ -692,10 +691,6 @@ def avatar_redirect():
 
 
 
-#==============================================================
-#Session Change
-
-#=============================================================
 
 
 
@@ -707,84 +702,9 @@ def avatar_redirect():
 
 
 
-
-
-
-
-
-
-
-def get_client(phone: str):
-    """
-    প্রতিবার unique .tmp session ফাইল ব্যবহার করবে (no DB lock)
-    """
-    safe_phone = phone.replace("+", "").replace(" ", "").strip()
-    base_path = os.path.join(SESS_DIR, f"{safe_phone}.session")
-
-    # ✅ Unique tmp filename per request
-    tmp_path = base_path + f".{uuid.uuid4().hex[:6]}.tmp"
-
-    # Copy base .session if exists
-    if os.path.exists(base_path):
-        try:
-            shutil.copy(base_path, tmp_path)
-        except Exception as e:
-            print(f"⚠️ Could not copy session file: {e}")
-
-    session_path = tmp_path if os.path.exists(tmp_path) else base_path
-    print(f"📂 Using session file: {session_path}")
-
-    # ✅ Added retry options for Telethon client
-    return TelegramClient(
-        session_path,
-        API_ID,
-        API_HASH,
-        connection_retries=5,
-        retry_delay=1,
-    )
-
-
-
-
-
-
-
-
-
-
-
-def cleanup_tmp_sessions():
-    """
-    পুরনো .tmp session ফাইল auto delete করবে
-    """
-    for f in os.listdir(SESS_DIR):
-        if f.endswith(".tmp"):
-            try:
-                os.remove(os.path.join(SESS_DIR, f))
-                print(f"🧹 deleted tmp: {f}")
-            except Exception as e:
-                print(f"⚠️ cleanup error: {e}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#==========================================================
-#session change
-#====================================================
 
 # ==================================
 # 🏁 RUN SERVER
 # ==================================
 if __name__ == "__main__":
-    cleanup_tmp_sessions()
     app.run(host="0.0.0.0", port=8080, debug=False)
