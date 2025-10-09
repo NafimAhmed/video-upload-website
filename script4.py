@@ -1,264 +1,3 @@
-#
-#
-#
-# import os
-# import asyncio
-# from flask import Flask, request, jsonify
-# from telethon import TelegramClient
-# from telethon.errors import (
-#     PhoneCodeInvalidError,
-#     SessionPasswordNeededError,
-#     PhoneNumberInvalidError,
-# )
-#
-# # =============================
-# # 🔧 CONFIGURATION
-# # =============================
-#
-# API_ID = int(os.getenv("TG_API_ID", "20767444"))        # ← তোমার Telegram App ID বসাও
-# API_HASH = os.getenv("TG_API_HASH", "2ca0cb711803e1aae9e45d34eb81e57a")  # ← তোমার App Hash বসাও
-# SESS_DIR = "./sessions"
-# os.makedirs(SESS_DIR, exist_ok=True)
-#
-# # =============================
-# # 🚀 Flask App Init
-# # =============================
-# app = Flask(__name__)
-#
-# def get_client(phone: str):
-#     """Session per phone number"""
-#     session_path = os.path.join(SESS_DIR, f"{phone}.session")
-#     return TelegramClient(session_path, API_ID, API_HASH)
-#
-#
-# # =============================
-# # 📱 1️⃣ Login Endpoint (send OTP)
-# # =============================
-# @app.route("/login", methods=["POST"])
-# def login():
-#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
-#     if not phone:
-#         return jsonify({"status": "error", "detail": "phone missing"}), 400
-#
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#
-#     async def send_code():
-#         client = get_client(phone)
-#         await client.connect()
-#         try:
-#             if await client.is_user_authorized():
-#                 return {"status": "already_authorized"}
-#             sent = await client.send_code_request(phone)
-#             print(f"📨 Sent code to {phone} | hash={sent.phone_code_hash}")
-#             return {
-#                 "status": "code_sent",
-#                 "phone_code_hash": sent.phone_code_hash
-#             }
-#         except PhoneNumberInvalidError:
-#             return {"status": "error", "detail": "Invalid phone number"}
-#         except Exception as e:
-#             return {"status": "error", "detail": str(e)}
-#         finally:
-#             await client.disconnect()
-#
-#     result = loop.run_until_complete(send_code())
-#     print("✅ Login result:", result)
-#     return jsonify(result)
-#
-#
-# # =============================
-# # 🔑 2️⃣ Verify Endpoint (verify OTP)
-# # =============================
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-# # @app.route("/verify", methods=["POST"])
-# # def verify():
-# #     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
-# #     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
-# #     phone_code_hash = request.form.get("phone_code_hash") or (request.json.get("phone_code_hash") if request.is_json else None)
-# #
-# #     if not phone or not code or not phone_code_hash:
-# #         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
-# #
-# #     loop = asyncio.new_event_loop()
-# #     asyncio.set_event_loop(loop)
-# #
-# #     async def do_verify():
-# #         client = get_client(phone)
-# #         await client.connect()
-# #         try:
-# #             if await client.is_user_authorized():
-# #                 return {"status": "already_authorized"}
-# #             await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-# #             return {"status": "authorized"}
-# #         except PhoneCodeInvalidError:
-# #             return {"status": "error", "detail": "Invalid OTP code"}
-# #         except SessionPasswordNeededError:
-# #             return {"status": "error", "detail": "Two-step verification enabled"}
-# #         except Exception as e:
-# #             return {"status": "error", "detail": str(e)}
-# #         finally:
-# #             await client.disconnect()
-# #
-# #     result = loop.run_until_complete(do_verify())
-# #     print("✅ Verify result:", result)
-# #     return jsonify(result)
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-# @app.route("/verify", methods=["POST"])
-# def verify():
-#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
-#     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
-#     phone_code_hash = request.form.get("phone_code_hash") or (request.json.get("phone_code_hash") if request.is_json else None)
-#
-#     if not phone or not code or not phone_code_hash:
-#         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
-#
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#
-#     async def do_verify():
-#         client = get_client(phone)
-#         await client.connect()
-#         try:
-#             if await client.is_user_authorized():
-#                 return {"status": "already_authorized"}
-#             user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-#             await client.send_message("me", "✅ Flask API login successful!")
-#             await client.disconnect()
-#             return {"status": "authorized", "user": str(user)}
-#         except Exception as e:
-#             return {"status": "error", "detail": str(e)}
-#
-#     result = loop.run_until_complete(do_verify())
-#     print("✅ Verify result:", result)
-#     return jsonify(result)
-#
-#
-#
-#
-#
-#
-# # =============================
-# # ✉️ 3️⃣ Send Message
-# # =============================
-# @app.route("/send", methods=["POST"])
-# def send_message():
-#     phone = request.form.get("phone")
-#     to = request.form.get("to")
-#     text = request.form.get("text")
-#
-#     if not phone or not to or not text:
-#         return jsonify({"status": "error", "detail": "phone/to/text missing"}), 400
-#
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#
-#     async def do_send():
-#         client = get_client(phone)
-#         await client.connect()
-#         try:
-#             if not await client.is_user_authorized():
-#                 return {"status": "error", "detail": "not authorized"}
-#             await client.send_message(to, text)
-#             return {"status": "sent"}
-#         except Exception as e:
-#             return {"status": "error", "detail": str(e)}
-#         finally:
-#             await client.disconnect()
-#
-#     result = loop.run_until_complete(do_send())
-#     print("✅ Send result:", result)
-#     return jsonify(result)
-#
-#
-# # =============================
-# # 💬 4️⃣ Get Dialogs (chat list)
-# # =============================
-# @app.route("/dialogs", methods=["GET"])
-# def get_dialogs():
-#     phone = request.args.get("phone")
-#     if not phone:
-#         return jsonify({"status": "error", "detail": "phone missing"}), 400
-#
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#
-#     async def do_get_dialogs():
-#         client = get_client(phone)
-#         await client.connect()
-#         try:
-#             if not await client.is_user_authorized():
-#                 return {"status": "error", "detail": "not authorized"}
-#             dialogs = []
-#             async for d in client.iter_dialogs(limit=50):
-#                 dialogs.append({
-#                     "id": d.id,
-#                     "name": getattr(d.entity, 'title', getattr(d.entity, 'username', str(d.entity)))
-#                 })
-#             return {"status": "ok", "dialogs": dialogs}
-#         except Exception as e:
-#             return {"status": "error", "detail": str(e)}
-#         finally:
-#             await client.disconnect()
-#
-#     result = loop.run_until_complete(do_get_dialogs())
-#     print("✅ Dialogs result:", result)
-#     return jsonify(result)
-#
-#
-# # =============================
-# # 🏁 RUN APP
-# # =============================
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=8080, debug=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 import os
 import shutil
@@ -405,69 +144,6 @@ def login():
     return jsonify(result)
 
 
-
-
-
-
-
-
-
-# ==================================
-# 🔑 2️⃣ VERIFY OTP
-# ==================================
-# @app.route("/verify", methods=["POST"])
-# def verify():
-#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
-#     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
-#     phone_code_hash = request.form.get("phone_code_hash") or (request.json.get("phone_code_hash") if request.is_json else None)
-#
-#     if not phone or not code or not phone_code_hash:
-#         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
-#
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#
-#     async def do_verify():
-#         client = get_client(phone)
-#         await client.connect()
-#         try:
-#             if await client.is_user_authorized():
-#                 return {"status": "already_authorized"}
-#
-#             user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-#             await client.send_message("me", "✅ Flask API login successful!")
-#             await client.session.save()
-#             await client.disconnect()
-#             return {"status": "authorized", "user": str(user)}
-#         except PhoneCodeInvalidError:
-#             return {"status": "error", "detail": "Invalid OTP code"}
-#         except SessionPasswordNeededError:
-#             return {"status": "error", "detail": "Two-step verification enabled"}
-#         except Exception as e:
-#             return {"status": "error", "detail": str(e)}
-#
-#     result = loop.run_until_complete(do_verify())
-#     print("✅ Verify result:", result)
-#     return jsonify(result)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @app.route("/verify", methods=["POST"])
 def verify():
     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
@@ -528,6 +204,73 @@ def verify():
 # ==================================
 # ✉️ 3️⃣ SEND MESSAGE
 # ==================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @app.route("/send", methods=["POST"])
+# def send_message():
+#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
+#     to = request.form.get("to") or (request.json.get("to") if request.is_json else None)
+#     text = request.form.get("text") or (request.json.get("text") if request.is_json else None)
+#
+#     if not phone or not to or not text:
+#         return jsonify({"status": "error", "detail": "phone/to/text missing"}), 400
+#
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
+#
+#     async def do_send():
+#         client = get_client(phone)
+#         await client.connect()
+#         await client.start()
+#         try:
+#             if not await client.is_user_authorized():
+#                 return {"status": "error", "detail": "not authorized"}
+#             await client.send_message(to, text)
+#             await client.session.save()
+#             return {"status": "sent"}
+#         except Exception as e:
+#             return {"status": "error", "detail": str(e)}
+#         finally:
+#             await client.disconnect()
+#             await client.disconnected
+#
+#     result = loop.run_until_complete(do_send())
+#     print("✅ Send result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route("/send", methods=["POST"])
 def send_message():
     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
@@ -547,25 +290,25 @@ def send_message():
         try:
             if not await client.is_user_authorized():
                 return {"status": "error", "detail": "not authorized"}
+
             await client.send_message(to, text)
-            await client.session.save()
+            client.session.save()
             return {"status": "sent"}
+
         except Exception as e:
             return {"status": "error", "detail": str(e)}
+
         finally:
-            await client.disconnect()
-            await client.disconnected
+            try:
+                await client.disconnect()
+                if hasattr(client, "disconnected") and client.disconnected:
+                    await client.disconnected
+            except Exception:
+                pass
 
     result = loop.run_until_complete(do_send())
     print("✅ Send result:", result)
     return jsonify(result)
-
-
-
-
-
-
-
 
 
 
@@ -631,6 +374,179 @@ def logout():
 # ==================================
 # 💬 4️⃣ GET DIALOGS (Chat list)
 # ==================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @app.route("/dialogs", methods=["GET"])
+# def get_dialogs():
+#     phone = request.args.get("phone")
+#     if not phone:
+#         return jsonify({"status": "error", "detail": "phone missing"}), 400
+#
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
+#
+#     async def do_get_dialogs(retry=0):
+#         client = get_client(phone)
+#         try:
+#             await client.connect()
+#             await client.start()
+#
+#             if not await client.is_user_authorized():
+#                 await client.disconnect()
+#                 return {"status": "error", "detail": "not authorized"}
+#
+#             dialogs = []
+#             async for d in client.iter_dialogs(limit=50):
+#                 dialogs.append({
+#                     "id": d.id,
+#                     "name": getattr(d.entity, 'title', getattr(d.entity, 'username', str(d.entity))),
+#                     "unread_count": d.unread_count,
+#                     "is_user": d.is_user,
+#                     "is_group": d.is_group,
+#                     "is_channel": d.is_channel
+#                 })
+#             await client.disconnect()
+#             await client.disconnected
+#             return {"status": "ok", "dialogs": dialogs}
+#
+#         except sqlite3.OperationalError as e:
+#             if "database is locked" in str(e) and retry < 3:
+#                 print(f"⏳ Database locked, retrying ({retry+1}) ...")
+#                 time.sleep(0.5)
+#                 return await do_get_dialogs(retry + 1)
+#             return {"status": "error", "detail": f"SQLite lock error: {str(e)}"}
+#
+#         except Exception as e:
+#             return {"status": "error", "detail": str(e)}
+#         finally:
+#             try:
+#                 await client.disconnect()
+#                 await client.disconnected
+#             except Exception:
+#                 pass
+#
+#     result = loop.run_until_complete(do_get_dialogs())
+#     print("✅ Dialogs result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @app.route("/dialogs", methods=["GET"])
+# def get_dialogs():
+#     phone = request.args.get("phone")
+#     if not phone:
+#         return jsonify({"status": "error", "detail": "phone missing"}), 400
+#
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
+#
+#     AVATAR_DIR = os.path.join("static", "avatars")
+#     os.makedirs(AVATAR_DIR, exist_ok=True)
+#
+#     async def do_get_dialogs(retry=0):
+#         client = get_client(phone)
+#         try:
+#             await client.connect()
+#             await client.start()
+#
+#             if not await client.is_user_authorized():
+#                 await client.disconnect()
+#                 return {"status": "error", "detail": "not authorized"}
+#
+#             dialogs = []
+#             async for d in client.iter_dialogs(limit=50):
+#                 name = getattr(d.entity, 'title', getattr(d.entity, 'username', str(d.entity)))
+#
+#                 # 🧩 profile photo নাম তৈরি
+#                 photo_path = None
+#                 image_url = None
+#                 try:
+#                     if d.entity.photo:
+#                         safe_id = str(d.id).replace("-", "_")
+#                         photo_path = os.path.join(AVATAR_DIR, f"{safe_id}.jpg")
+#                         await client.download_profile_photo(d.entity, file=photo_path)
+#                         image_url = f"/avatars/{safe_id}.jpg"
+#                 except Exception as e:
+#                     print(f"⚠️ photo error ({name}): {e}")
+#
+#                 dialogs.append({
+#                     "id": d.id,
+#                     "name": name,
+#                     "unread_count": d.unread_count,
+#                     "is_user": d.is_user,
+#                     "is_group": d.is_group,
+#                     "is_channel": d.is_channel,
+#                     "image": image_url  # 🧩 image URL যোগ
+#                 })
+#
+#             await client.disconnect()
+#             if hasattr(client, "disconnected") and client.disconnected:
+#                 await client.disconnected
+#
+#             return {"status": "ok", "dialogs": dialogs}
+#
+#         except sqlite3.OperationalError as e:
+#             if "database is locked" in str(e) and retry < 3:
+#                 print(f"⏳ Database locked, retrying ({retry+1}) ...")
+#                 time.sleep(0.5)
+#                 return await do_get_dialogs(retry + 1)
+#             return {"status": "error", "detail": f"SQLite lock error: {str(e)}"}
+#
+#         except Exception as e:
+#             return {"status": "error", "detail": str(e)}
+#
+#         finally:
+#             try:
+#                 await client.disconnect()
+#                 if hasattr(client, "disconnected") and client.disconnected:
+#                     await client.disconnected
+#             except Exception:
+#                 pass
+#
+#     result = loop.run_until_complete(do_get_dialogs())
+#     print("✅ Dialogs result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+
 @app.route("/dialogs", methods=["GET"])
 def get_dialogs():
     phone = request.args.get("phone")
@@ -652,16 +568,43 @@ def get_dialogs():
 
             dialogs = []
             async for d in client.iter_dialogs(limit=50):
-                dialogs.append({
+                e = d.entity  # entity shortcut
+                name = getattr(e, "title", getattr(e, "username", str(e)))
+
+                # =============================
+                # 🧩 detailed info extract করা
+                # =============================
+                dialog_info = {
                     "id": d.id,
-                    "name": getattr(d.entity, 'title', getattr(d.entity, 'username', str(d.entity))),
+                    "name": name,
                     "unread_count": d.unread_count,
                     "is_user": d.is_user,
                     "is_group": d.is_group,
-                    "is_channel": d.is_channel
-                })
+                    "is_channel": d.is_channel,
+                    "is_pinned": getattr(d, "pinned", False),
+                    "is_verified": getattr(e, "verified", False),
+                    "is_bot": getattr(e, "bot", False),
+                    "username": getattr(e, "username", None),
+                    "first_name": getattr(e, "first_name", None),
+                    "last_name": getattr(e, "last_name", None),
+                    "phone": getattr(e, "phone", None),
+                    "title": getattr(e, "title", None),
+                    "participants_count": getattr(getattr(e, "participants_count", None), "value", None),
+                    "date": getattr(d.message, "date", None).isoformat() if d.message and getattr(d.message, "date", None) else None,
+                    "last_message": getattr(d.message, "message", None),
+                    "sender_id": getattr(getattr(d.message, "from_id", None), "user_id", None),
+                    "peer_id": getattr(getattr(d.message, "peer_id", None), "channel_id", None)
+                               or getattr(getattr(d.message, "peer_id", None), "user_id", None)
+                               or getattr(getattr(d.message, "peer_id", None), "chat_id", None),
+                    "message_id": getattr(d.message, "id", None)
+                }
+
+                dialogs.append(dialog_info)
+
             await client.disconnect()
-            await client.disconnected
+            if hasattr(client, "disconnected") and client.disconnected:
+                await client.disconnected
+
             return {"status": "ok", "dialogs": dialogs}
 
         except sqlite3.OperationalError as e:
@@ -673,16 +616,34 @@ def get_dialogs():
 
         except Exception as e:
             return {"status": "error", "detail": str(e)}
+
         finally:
             try:
                 await client.disconnect()
-                await client.disconnected
+                if hasattr(client, "disconnected") and client.disconnected:
+                    await client.disconnected
             except Exception:
                 pass
 
     result = loop.run_until_complete(do_get_dialogs())
     print("✅ Dialogs result:", result)
     return jsonify(result)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ==================================
 # 🏁 RUN SERVER
