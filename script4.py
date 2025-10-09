@@ -4,7 +4,7 @@ import shutil
 import asyncio
 import time
 import sqlite3
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, send_file
 from telethon import TelegramClient
 from telethon.errors import (
     PhoneCodeInvalidError,
@@ -637,6 +637,56 @@ def get_dialogs():
 
 
 
+
+
+
+
+
+
+
+
+
+
+@app.route("/avatar_redirect", methods=["GET"])
+def avatar_redirect():
+    """
+    Telegram avatar live redirect (no file save)
+    Example:
+      /avatar_redirect?phone=+8801606100833&username=farhan_bd
+    """
+    phone = request.args.get("phone")
+    username = request.args.get("username")
+
+    if not phone or not username:
+        return jsonify({"error": "phone or username missing"}), 400
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def get_avatar_bytes():
+        client = get_client(phone)
+        await client.connect()
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            return None
+        try:
+            entity = await client.get_entity(username)
+            # ⚡️ Telegram থেকে avatar bytes আনো
+            avatar_bytes = await client.download_profile_photo(entity, file=bytes)
+            await client.disconnect()
+            return avatar_bytes
+        except Exception as e:
+            print(f"⚠️ avatar error for {username}: {e}")
+            return None
+
+    img_bytes = loop.run_until_complete(get_avatar_bytes())
+    if img_bytes is None:
+        # fallback: default avatar image দেখাবে
+        return redirect("https://telegram.org/img/t_logo.png")
+
+    # 🧠 Flask দিয়ে memory থেকে সরাসরি image পাঠাও
+    from io import BytesIO
+    return send_file(BytesIO(img_bytes), mimetype="image/jpeg")
 
 
 
