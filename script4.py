@@ -35,6 +35,18 @@ app = Flask(__name__)
 # ==================================
 # 🧩 Helper: Safe Client Loader
 # ==================================
+
+
+
+
+
+
+
+
+
+
+
+
 def get_client(phone: str):
     """
     প্রতিবার client connect করার আগে .session ফাইলের একটা .tmp কপি নেয়,
@@ -53,6 +65,40 @@ def get_client(phone: str):
     session_path = tmp_path if os.path.exists(tmp_path) else base_path
     print(f"📂 Using session file: {session_path}")
     return TelegramClient(session_path, API_ID, API_HASH)
+
+
+
+
+# def get_client(phone: str):
+#     safe_phone = phone.replace("+", "").replace(" ", "").strip()
+#     base_path = os.path.join(SESS_DIR, f"{safe_phone}.session")
+#
+#     # 🔹 প্রতিবার নতুন temp copy তৈরি করো
+#     tmp_path = os.path.join(SESS_DIR, f"{safe_phone}_{int(time.time()*1000)}.tmp.session")
+#
+#     if os.path.exists(base_path):
+#         try:
+#             shutil.copy(base_path, tmp_path)
+#         except Exception as e:
+#             print(f"⚠️ Could not copy session file: {e}")
+#             tmp_path = base_path  # fallback
+#
+#     print(f"📂 Using isolated session file: {tmp_path}")
+#     return TelegramClient(tmp_path, API_ID, API_HASH)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ==================================
 # 📱 1️⃣ LOGIN (Send OTP)
@@ -647,12 +693,61 @@ def get_dialogs():
 
 
 
+# @app.route("/avatar_redirect", methods=["GET"])
+# def avatar_redirect():
+#     """
+#     Telegram avatar live redirect (no file save)
+#     Example:
+#       /avatar_redirect?phone=+8801606100833&username=farhan_bd
+#     """
+#     phone = request.args.get("phone")
+#     username = request.args.get("username")
+#
+#     if not phone or not username:
+#         return jsonify({"error": "phone or username missing"}), 400
+#
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
+#
+#     async def get_avatar_bytes():
+#         client = get_client(phone)
+#         await client.connect()
+#         if not await client.is_user_authorized():
+#             await client.disconnect()
+#             return None
+#         try:
+#             entity = await client.get_entity(username)
+#             # ⚡️ Telegram থেকে avatar bytes আনো
+#             avatar_bytes = await client.download_profile_photo(entity, file=bytes)
+#             await client.disconnect()
+#             return avatar_bytes
+#         except Exception as e:
+#             print(f"⚠️ avatar error for {username}: {e}")
+#             return None
+#
+#     img_bytes = loop.run_until_complete(get_avatar_bytes())
+#     if img_bytes is None:
+#         # fallback: default avatar image দেখাবে
+#         return redirect("https://telegram.org/img/t_logo.png")
+#
+#     # 🧠 Flask দিয়ে memory থেকে সরাসরি image পাঠাও
+#     from io import BytesIO
+#     return send_file(BytesIO(img_bytes), mimetype="image/jpeg")
+
+
+
+
+
+
+
+
+
 @app.route("/avatar_redirect", methods=["GET"])
 def avatar_redirect():
     """
     Telegram avatar live redirect (no file save)
     Example:
-      /avatar_redirect?phone=+8801606100833&username=farhan_bd
+      /avatar_redirect?phone=+8801606100833&username=@usdt_identifi_bot
     """
     phone = request.args.get("phone")
     username = request.args.get("username")
@@ -663,39 +758,65 @@ def avatar_redirect():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    # ⚙️ Safe Client Loader (isolation for avatar fetch)
+    def get_temp_client(phone: str):
+        safe_phone = phone.replace("+", "").replace(" ", "").strip()
+        base_path = os.path.join(SESS_DIR, f"{safe_phone}.session")
+
+        # প্রতিবার নতুন temp copy তৈরি করো যাতে SQLite lock না হয়
+        tmp_path = os.path.join(SESS_DIR, f"{safe_phone}_{int(time.time()*1000)}.tmp.session")
+
+        if os.path.exists(base_path):
+            try:
+                shutil.copy(base_path, tmp_path)
+            except Exception as e:
+                print(f"⚠️ Could not copy session file: {e}")
+                tmp_path = base_path  # fallback
+
+        print(f"📂 Using isolated session file: {tmp_path}")
+        return TelegramClient(tmp_path, API_ID, API_HASH), tmp_path
+
     async def get_avatar_bytes():
-        client = get_client(phone)
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            return None
+        client, tmp_path = get_temp_client(phone)
         try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                return None, tmp_path
+
             entity = await client.get_entity(username)
-            # ⚡️ Telegram থেকে avatar bytes আনো
+
+            # ⚡️ Telegram থেকে avatar bytes আনো (memory তে)
             avatar_bytes = await client.download_profile_photo(entity, file=bytes)
             await client.disconnect()
-            return avatar_bytes
+            return avatar_bytes, tmp_path
+
         except Exception as e:
             print(f"⚠️ avatar error for {username}: {e}")
-            return None
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            return None, tmp_path
 
-    img_bytes = loop.run_until_complete(get_avatar_bytes())
+    # 🔹 Avatar fetch করো
+    img_bytes, tmp_file = loop.run_until_complete(get_avatar_bytes())
+
+    # 🧹 temp session cleanup
+    try:
+        if tmp_file and os.path.exists(tmp_file) and tmp_file.endswith(".tmp.session"):
+            os.remove(tmp_file)
+            print(f"🧹 Temp session removed: {tmp_file}")
+    except Exception as e:
+        print(f"⚠️ Could not delete temp session: {e}")
+
+    # 🔸 যদি avatar না পাওয়া যায়, fallback Telegram logo দেখাও
     if img_bytes is None:
-        # fallback: default avatar image দেখাবে
         return redirect("https://telegram.org/img/t_logo.png")
 
     # 🧠 Flask দিয়ে memory থেকে সরাসরি image পাঠাও
     from io import BytesIO
     return send_file(BytesIO(img_bytes), mimetype="image/jpeg")
-
-
-
-
-
-
-
-
-
 
 
 
