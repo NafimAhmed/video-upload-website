@@ -985,44 +985,143 @@ def verify():
 # ==================================
 # 💬 GET DIALOGS
 # ==================================
+# @app.route("/dialogs", methods=["GET"])
+# def get_dialogs():
+#     phone = request.args.get("phone")
+#     if not phone:
+#         return jsonify({"status": "error", "detail": "phone missing"}), 400
+#
+#     async def do_get_dialogs():
+#         client = await get_client(phone)
+#         # ✅ connect only, not start (start triggers new OTP if blank session)
+#         await client.connect()
+#
+#         # reload MongoDB session after verify
+#         if not await client.is_user_authorized():
+#             await client.disconnect()
+#             return {"status": "error", "detail": "not authorized"}
+#
+#         dialogs = []
+#         async for d in client.iter_dialogs(limit=50):
+#             e = d.entity
+#             dialogs.append({
+#                 "id": d.id,
+#                 "name": getattr(e, "title", getattr(e, "username", str(e))),
+#                 "unread_count": d.unread_count,
+#                 "is_user": d.is_user,
+#                 "is_group": d.is_group,
+#                 "is_channel": d.is_channel,
+#                 "date": getattr(d.message, "date", None).isoformat() if d.message else None,
+#                 "last_message": getattr(d.message, "message", None),
+#                 "username": getattr(e, "username", None),
+#                 "first_name": getattr(e, "first_name", None),
+#                 "last_name": getattr(e, "last_name", None)
+#             })
+#         await client.disconnect()
+#         return {"status": "ok", "dialogs": dialogs}
+#
+#     result = asyncio.run(do_get_dialogs())
+#     print("✅ Dialogs result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+
 @app.route("/dialogs", methods=["GET"])
 def get_dialogs():
+    """
+    Telegram থেকে সমস্ত dialogs (chats, groups, channels)
+    full detailed info সহ ফেরত দেয়।
+    Example:
+      /dialogs?phone=+8801606100833
+    """
     phone = request.args.get("phone")
     if not phone:
         return jsonify({"status": "error", "detail": "phone missing"}), 400
 
     async def do_get_dialogs():
         client = await get_client(phone)
-        # ✅ connect only, not start (start triggers new OTP if blank session)
         await client.connect()
 
-        # reload MongoDB session after verify
         if not await client.is_user_authorized():
             await client.disconnect()
             return {"status": "error", "detail": "not authorized"}
 
         dialogs = []
-        async for d in client.iter_dialogs(limit=50):
+        async for d in client.iter_dialogs(limit=200):  # চাইলে limit বাড়াতে পারো
             e = d.entity
-            dialogs.append({
+
+            # 🧩 Try to get profile photo URL (optional)
+            photo = None
+            try:
+                if e.photo:
+                    photo = await client.download_profile_photo(e, file=bytes)
+            except Exception:
+                pass
+
+            # 🧩 Last message info
+            msg = d.message
+            last_msg = {
+                "id": getattr(msg, "id", None),
+                "text": getattr(msg, "message", None),
+                "date": getattr(msg, "date", None).isoformat() if getattr(msg, "date", None) else None,
+                "sender_id": getattr(getattr(msg, "from_id", None), "user_id", None),
+                "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
+                "media": str(type(getattr(msg, "media", None)).__name__) if getattr(msg, "media", None) else None,
+            } if msg else None
+
+            dialog_info = {
+                # 🆔 Basic identifiers
                 "id": d.id,
                 "name": getattr(e, "title", getattr(e, "username", str(e))),
-                "unread_count": d.unread_count,
+                "username": getattr(e, "username", None),
+                "first_name": getattr(e, "first_name", None),
+                "last_name": getattr(e, "last_name", None),
+                "phone": getattr(e, "phone", None),
+
+                # 🔍 Chat Type
                 "is_user": d.is_user,
                 "is_group": d.is_group,
                 "is_channel": d.is_channel,
-                "date": getattr(d.message, "date", None).isoformat() if d.message else None,
-                "last_message": getattr(d.message, "message", None),
-                "username": getattr(e, "username", None),
-                "first_name": getattr(e, "first_name", None),
-                "last_name": getattr(e, "last_name", None)
-            })
+
+                # 🕐 Message + Meta
+                "unread_count": d.unread_count,
+                "pinned": getattr(d, "pinned", False),
+                "verified": getattr(e, "verified", False),
+                "restricted": getattr(e, "restricted", False),
+                "bot": getattr(e, "bot", False),
+                "scam": getattr(e, "scam", False),
+                "fake": getattr(e, "fake", False),
+                "premium": getattr(e, "premium", False),
+
+                # 🧠 Extended fields
+                "title": getattr(e, "title", None),
+                "about": getattr(e, "about", None),
+                "participants_count": getattr(e, "participants_count", None),
+                "access_hash": getattr(e, "access_hash", None),
+                "dc_id": getattr(getattr(e, "photo", None), "dc_id", None),
+
+                # 💬 Last Message Info
+                "last_message": last_msg,
+
+                # 🖼️ Optional: photo bytes base64
+                "has_photo": bool(photo),
+            }
+
+            dialogs.append(dialog_info)
+
         await client.disconnect()
-        return {"status": "ok", "dialogs": dialogs}
+        return {"status": "ok", "count": len(dialogs), "dialogs": dialogs}
 
     result = asyncio.run(do_get_dialogs())
-    print("✅ Dialogs result:", result)
+    print(f"✅ Dialogs result: {result['count']} chats fetched")
     return jsonify(result)
+
 
 
 # ==================================
@@ -1126,6 +1225,74 @@ def send_message():
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ==================================
+# 💌 GET CHAT MESSAGES (NEW)
+# ==================================
+
+
+
+
+
+
+@app.route("/messages", methods=["GET"])
+def get_messages():
+    phone = request.args.get("phone")
+    chat_id = request.args.get("chat_id")
+    limit = int(request.args.get("limit", 30))
+
+    if not phone or not chat_id:
+        return jsonify({"status": "error", "detail": "phone/chat_id missing"}), 400
+
+    async def do_get_messages():
+        client = await get_client(phone)
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            return {"status": "error", "detail": "not authorized"}
+
+        try:
+            # ✅ আগে entity resolve করো
+            entity = await client.get_entity(int(chat_id))
+
+            messages = []
+            async for msg in client.iter_messages(entity, limit=limit):
+                messages.append({
+                    "id": msg.id,
+                    "text": msg.message,
+                    "sender_id": getattr(msg.from_id, "user_id", None),
+                    "date": msg.date.isoformat() if msg.date else None,
+                    "is_out": msg.out,
+                })
+            await client.disconnect()
+            return {"status": "ok", "messages": list(reversed(messages))}
+
+        except Exception as e:
+            await client.disconnect()
+            return {"status": "error", "detail": str(e)}
+
+    result = asyncio.run(do_get_messages())
+    print("✅ Messages result:", result)
+    return jsonify(result)
 
 
 
