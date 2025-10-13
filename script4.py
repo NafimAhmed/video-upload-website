@@ -13,6 +13,14 @@ from telethon.errors import (
 from pymongo import MongoClient
 from datetime import datetime, timezone
 from io import BytesIO
+from flask_socketio import SocketIO, emit
+from telethon import events
+
+
+
+
+
+
 
 # ==================================
 # ⚙️ CONFIGURATION
@@ -28,6 +36,9 @@ db = mongo_client[MONGO_DB]
 
 # ✅ Flask Init
 app = Flask(__name__)
+
+socketio = SocketIO(app, cors_allowed_origins="*")
+
 
 # ✅ Windows fix
 try:
@@ -50,6 +61,48 @@ async def get_client(phone: str):
         print(f"⚠️ No session found for {phone}, creating new one.")
     client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
     return client
+
+
+
+###############################################################################
+
+
+
+
+
+
+async def add_new_message_listener(phone: str, client: TelegramClient):
+    """Listen for incoming Telegram messages in real-time"""
+    @client.on(events.NewMessage)
+    async def handler(event):
+        try:
+            sender = await event.get_sender()
+            data = {
+                "phone": phone,
+                "chat_id": getattr(event.chat, "id", None),
+                "text": event.raw_text,
+                "sender_id": getattr(sender, "id", None),
+                "sender_name": getattr(sender, "first_name", None),
+                "date": event.date.isoformat() if event.date else None
+            }
+            print(f"📩 New message for {phone}: {data}")
+            socketio.emit("new_message", data)
+        except Exception as e:
+            print(f"⚠️ Error in new_message handler: {e}")
+
+
+
+
+
+
+
+
+
+
+
+##########################################################
+
+
 
 
 async def save_session(phone: str, client: TelegramClient):
