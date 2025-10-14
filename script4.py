@@ -221,6 +221,94 @@ def ws_route(ws):
 
 
 
+import json
+import asyncio
+import threading
+from telethon import events
+
+# ===========================================
+# 🌐 NEW: WebSocket route for per-chat listening
+# ===========================================
+@sock.route('/chat_ws')
+def chat_ws(ws):
+    """
+    Real-time chat WebSocket
+    - User enters specific chat_id
+    - Telegram listener starts only for that chat
+    - Disconnects automatically when socket closes
+    """
+    print("🔗 [chat_ws] WebSocket connected")
+    tg_client = None
+
+    try:
+        msg = ws.receive()
+        if msg is None:
+            return
+
+        data = json.loads(msg)
+        phone = data.get("phone")
+        chat_id = data.get("chat_id")
+
+        if not all([phone, chat_id]):
+            ws.send(json.dumps({"status": "error", "detail": "phone/chat_id missing"}))
+            return
+
+        async def run_chat_listener():
+            nonlocal tg_client
+            tg_client = await get_client(phone)
+            await tg_client.connect()
+
+            if not await tg_client.is_user_authorized():
+                ws.send(json.dumps({"status": "error", "detail": "not authorized"}))
+                await tg_client.disconnect()
+                return
+
+            ws.send(json.dumps({"status": "listening", "chat_id": chat_id}))
+            print(f"👂 [chat_ws] Listening Telegram chat {chat_id} for {phone}")
+
+            # 🔹 শুধুমাত্র এই chat_id এর message গুলো শুনবে
+            @tg_client.on(events.NewMessage(chats=int(chat_id)))
+            async def handler(event):
+                sender = await event.get_sender()
+                payload = {
+                    "action": "new_message",
+                    "phone": phone,
+                    "chat_id": chat_id,
+                    "text": event.raw_text,
+                    "sender_name": getattr(sender, "first_name", None),
+                    "date": event.date.isoformat() if event.date else None
+                }
+                try:
+                    ws.send(json.dumps(payload))
+                    print(f"📨 [chat_ws] Message from chat {chat_id}: {payload['text']}")
+                except Exception as e:
+                    print(f"⚠️ WS send failed: {e}")
+
+            # 🔄 Telegram listener চালাও
+            await tg_client.run_until_disconnected()
+
+        # 🔹 আলাদা থ্রেডে Telethon চালাও
+        threading.Thread(target=lambda: asyncio.run(run_chat_listener()), daemon=True).start()
+
+        # 🕹️ wait for client messages (e.g., stop command)
+        while True:
+            recv = ws.receive()
+            if recv is None:
+                break
+            if recv.strip().lower() == "stop":
+                print("🛑 [chat_ws] stop command received")
+                break
+
+    except Exception as e:
+        print(f"⚠️ [chat_ws] WebSocket error: {e}")
+
+    finally:
+        if tg_client:
+            try:
+                asyncio.run(tg_client.disconnect())
+            except:
+                pass
+        print("❌ [chat_ws] WebSocket disconnected")
 
 
 
