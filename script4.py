@@ -3,7 +3,6 @@
 import os
 import asyncio
 import threading
-
 from flask import Flask, request, jsonify, redirect, send_file
 from flask_sock import Sock
 from telethon import TelegramClient
@@ -18,10 +17,6 @@ from datetime import datetime, timezone
 from io import BytesIO
 from flask_socketio import SocketIO, emit
 from telethon import events
-
-
-
-
 
 
 
@@ -74,9 +69,7 @@ async def get_client(phone: str):
 # ==================================
 # 🌐 WEBSOCKET ENDPOINT
 # ==================================
-import json
-import asyncio
-from telethon import events
+
 
 @sock.route('/ws')
 def ws_route(ws):
@@ -197,19 +190,6 @@ def ws_route(ws):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-import json
 import asyncio
 import threading
 from telethon import events
