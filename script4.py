@@ -190,209 +190,625 @@ def ws_route(ws):
 
 
 
-import asyncio
-import threading
 from telethon import events
-from telethon.tl.types import InputPeerUser, InputPeerChannel, InputPeerChat
+from telethon.tl import functions, types
+from telethon.tl.types import (
+    InputPeerUser, InputPeerChannel, InputPeerChat,
+    UpdateUserTyping, UpdateChatUserTyping, UpdateChannelUserTyping
+)
+import asyncio, threading, json, time
+from datetime import datetime, timezone
+
+# --------------------------------------
+# SMALL HELPER: map Telegram typing action → human name
+# --------------------------------------
+def _typing_action_name(act):
+    # examples: types.SendMessageTypingAction, SendMessageUploadPhotoAction, ...
+    n = type(act).__name__
+    return (
+        "typing" if "TypingAction" in n else
+        "record_video" if "RecordVideo" in n else
+        "upload_video" if "UploadVideo" in n else
+        "record_voice" if "RecordAudio" in n or "RecordRound" in n else
+        "upload_voice" if "UploadAudio" in n else
+        "upload_photo" if "UploadPhoto" in n else
+        "upload_document" if "UploadDocument" in n else
+        "choose_sticker" if "ChooseSticker" in n else
+        "game" if "GamePlay" in n else
+        "geo" if "GeoLocation" in n else
+        "contact" if "Contact" in n else
+        "emoji" if "EmojiInteraction" in n else
+        "cancel" if "CancelAction" in n else
+        n
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# @sock.route('/chat_ws')
+# def chat_ws(ws):
+#     """
+#     🌐 Real-time Telegram Chat WebSocket (Typing-Aware)
+#     ----------------------------------------------------------
+#     Client must send first message:
+#       {"phone":"8801731979364","chat_id":"9181472862369316499"}
+#     Commands after init:
+#       {"action":"send","text":"Hi"}
+#       {"action":"typing_start"}
+#       {"action":"typing_stop"}
+#       {"action":"ping"}
+#       {"action":"stop"}
+#     Server pushes:
+#       {"action":"new_message", ...}
+#       {"action":"typing", "typing":true,  ...}
+#       {"action":"typing_stopped", ...}
+#     ----------------------------------------------------------
+#     """
+#     print("🔗 [chat_ws] connected")
+#     tg_client = None
+#     chat_id = None
+#     phone = None
+#     loop = None
+#
+#     # (chat_id, user_id) → last_seen_epoch
+#     typing_tracker = {}
+#     tracker_lock = threading.Lock()
+#     TYPING_TTL = 6.0  # seconds
+#
+#     # ---- background cleaner: emits typing_stopped when TTL passes
+#     def typing_cleaner():
+#         while True:
+#             time.sleep(2.0)
+#             now = time.time()
+#             to_stop = []
+#             with tracker_lock:
+#                 for key, last in list(typing_tracker.items()):
+#                     if now - last > TYPING_TTL:
+#                         to_stop.append(key)
+#                         typing_tracker.pop(key, None)
+#             for (cid, uid) in to_stop:
+#                 try:
+#                     ws.send(json.dumps({
+#                         "action": "typing_stopped",
+#                         "phone": phone,
+#                         "chat_id": str(cid),
+#                         "sender_id": uid,
+#                         "date": datetime.now(timezone.utc).isoformat()
+#                     }))
+#                 except Exception as e:
+#                     print(f"⚠️ typing_stopped send failed: {e}")
+#
+#     cleaner_thread = threading.Thread(target=typing_cleaner, daemon=True)
+#     cleaner_thread.start()
+#
+#     try:
+#         # =============== 1) INIT =================
+#         msg = ws.receive()
+#         if msg is None:
+#             return
+#         init = json.loads(msg)
+#         phone = init.get("phone")
+#         chat_id = init.get("chat_id")
+#         if not all([phone, chat_id]):
+#             ws.send(json.dumps({"status":"error","detail":"phone/chat_id missing"}))
+#             return
+#
+#         # =============== 2) listener =================
+#         async def run_listener():
+#             nonlocal tg_client, loop
+#             tg_client = await get_client(phone)
+#             loop = asyncio.get_event_loop()
+#             await tg_client.connect()
+#             if not await tg_client.is_user_authorized():
+#                 ws.send(json.dumps({"status":"error","detail":"not authorized"}))
+#                 await tg_client.disconnect()
+#                 return
+#
+#             ws.send(json.dumps({"status":"listening","chat_id":str(chat_id)}))
+#             print(f"👂 listening chat {chat_id} for {phone}")
+#
+#             # New message for THIS chat only
+#             @tg_client.on(events.NewMessage(chats=int(chat_id)))
+#             async def on_new_msg(event):
+#                 try:
+#                     sender = await event.get_sender()
+#                     ws.send(json.dumps({
+#                         "action":"new_message",
+#                         "phone": phone,
+#                         "chat_id": str(chat_id),
+#                         "text": event.raw_text,
+#                         "sender_id": getattr(sender, "id", None),
+#                         "sender_name": getattr(sender, "first_name", None),
+#                         "date": event.date.isoformat() if event.date else None
+#                     }))
+#                 except Exception as e:
+#                     print(f"⚠️ new_message error: {e}")
+#
+#             # Raw updates: catch typing in DM / group / channel
+#             @tg_client.on(events.Raw)
+#             async def on_raw(update):
+#                 try:
+#                     upd_chat_id = None
+#                     user_id = None
+#                     action = None
+#
+#                     if isinstance(update, UpdateUserTyping):
+#                         # DM typing (no chat_id, it's the user)
+#                         user_id = int(update.user_id)
+#                         action = _typing_action_name(update.action)
+#                         # For a DM, our chat_id equals user_id (the peer).
+#                         upd_chat_id = user_id
+#
+#                     elif isinstance(update, UpdateChatUserTyping):
+#                         # normal group
+#                         upd_chat_id = int(update.chat_id)
+#                         user_id = int(update.user_id)
+#                         action = _typing_action_name(update.action)
+#
+#                     elif isinstance(update, UpdateChannelUserTyping):
+#                         # channel / megagroup
+#                         upd_chat_id = int(update.channel_id)
+#                         user_id = int(update.user_id)
+#                         action = _typing_action_name(update.action)
+#
+#                     # Only notify if this update belongs to our current chat
+#                     if upd_chat_id is None:
+#                         return
+#                     if int(upd_chat_id) != int(chat_id):
+#                         return
+#
+#                     # mark as typing
+#                     with tracker_lock:
+#                         typing_tracker[(upd_chat_id, user_id)] = time.time()
+#
+#                     # fetch sender name (best-effort)
+#                     sender_name = None
+#                     try:
+#                         s = await tg_client.get_entity(user_id)
+#                         sender_name = getattr(s, "first_name", None) or getattr(s, "title", None)
+#                     except:
+#                         pass
+#
+#                     ws.send(json.dumps({
+#                         "action": "typing",
+#                         "phone": phone,
+#                         "chat_id": str(upd_chat_id),
+#                         "sender_id": user_id,
+#                         "sender_name": sender_name,
+#                         "typing": True,
+#                         "typing_action": action,  # e.g. "typing", "upload_photo", ...
+#                         "date": datetime.now(timezone.utc).isoformat()
+#                     }))
+#                 except Exception as e:
+#                     print(f"⚠️ raw update parse error: {e}")
+#
+#             await tg_client.run_until_disconnected()
+#
+#         threading.Thread(target=lambda: asyncio.run(run_listener()), daemon=True).start()
+#
+#         # =============== 3) WS command loop =================
+#         async def resolve_entity():
+#             # tries access_hash if provided; else warms cache and get_entity
+#             access_hash = None
+#             try:
+#                 data = last_cmd  # captured from outer scope
+#                 access_hash = data.get("access_hash")
+#             except:
+#                 pass
+#
+#             try:
+#                 if access_hash:
+#                     try:
+#                         return InputPeerUser(int(chat_id), int(access_hash))
+#                     except Exception:
+#                         try:
+#                             return InputPeerChannel(int(chat_id), int(access_hash))
+#                         except Exception:
+#                             return InputPeerChat(int(chat_id))
+#                 else:
+#                     # warm cache to reduce "Could not find the input entity" errors
+#                     async for _ in tg_client.iter_dialogs():
+#                         pass
+#                     return await tg_client.get_entity(int(chat_id))
+#             except Exception as e:
+#                 print(f"⚠️ resolve_entity fallback: {e}")
+#                 return InputPeerChat(int(chat_id))
+#
+#         last_cmd = {}
+#         while True:
+#             recv = ws.receive()
+#             if recv is None:
+#                 break
+#             try:
+#                 last_cmd = json.loads(recv)
+#                 action = last_cmd.get("action")
+#
+#                 if action == "stop":
+#                     print("🛑 stop received")
+#                     break
+#
+#                 elif action == "ping":
+#                     ws.send(json.dumps({"status":"pong"}))
+#
+#                 elif action == "send":
+#                     text = last_cmd.get("text")
+#                     if not text:
+#                         ws.send(json.dumps({"status":"error","detail":"text missing"}))
+#                         continue
+#
+#                     async def send_msg():
+#                         try:
+#                             if not tg_client or not await tg_client.is_user_authorized():
+#                                 ws.send(json.dumps({"status":"error","detail":"not authorized"}))
+#                                 return
+#                             entity = await resolve_entity()
+#                             await tg_client.send_message(entity, text)
+#                             ws.send(json.dumps({"status":"sent","chat_id":str(chat_id),"text":text}))
+#                         except Exception as e:
+#                             ws.send(json.dumps({"status":"error","detail":str(e)}))
+#                     asyncio.run_coroutine_threadsafe(send_msg(), loop)
+#
+#                 elif action == "typing_start":
+#                     async def do_typing_start():
+#                         try:
+#                             entity = await resolve_entity()
+#                             await tg_client(functions.messages.SetTypingRequest(
+#                                 peer=entity, action=types.SendMessageTypingAction()
+#                             ))
+#                             ws.send(json.dumps({"status":"typing_started"}))
+#                         except Exception as e:
+#                             ws.send(json.dumps({"status":"error","detail":str(e)}))
+#                     asyncio.run_coroutine_threadsafe(do_typing_start(), loop)
+#
+#                 elif action == "typing_stop":
+#                     async def do_typing_stop():
+#                         try:
+#                             entity = await resolve_entity()
+#                             await tg_client(functions.messages.SetTypingRequest(
+#                                 peer=entity, action=types.SendMessageCancelAction()
+#                             ))
+#                             ws.send(json.dumps({"status":"typing_stopped"}))
+#                         except Exception as e:
+#                             ws.send(json.dumps({"status":"error","detail":str(e)}))
+#                     asyncio.run_coroutine_threadsafe(do_typing_stop(), loop)
+#
+#                 else:
+#                     ws.send(json.dumps({"status":"error","detail":"unknown action"}))
+#
+#             except Exception as e:
+#                 ws.send(json.dumps({"status":"error","detail":str(e)}))
+#
+#     except Exception as e:
+#         print(f"⚠️ [chat_ws] Unexpected: {e}")
+#
+#     finally:
+#         if tg_client:
+#             try:
+#                 asyncio.run(tg_client.disconnect())
+#             except:
+#                 pass
+#         print("❌ [chat_ws] disconnected")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 @sock.route('/chat_ws')
 def chat_ws(ws):
     """
-    🌐 Real-time Telegram Chat WebSocket (FINAL FIXED)
-    -------------------------------------------------------
-    ✅ Real-time send & receive per chat
-    ✅ Async-safe (uses asyncio.run_coroutine_threadsafe)
-    ✅ Auto entity resolver (fixes PeerUser error)
-    ✅ Background listener thread
-    -------------------------------------------------------
-    Protocol:
-      Connect → ws://127.0.0.1:8080/chat_ws
+    🌐 Real-time Telegram Chat WebSocket (Typing + Text + Image)
+    ----------------------------------------------------------
+    Client must send first message:
+      {"phone":"8801731979364","chat_id":"9181472862369316499","access_hash":"-1478755446656361465"}
 
-      1️⃣ Initialize:
-        {
-          "phone": "8801731979364",
-          "chat_id": "9181472862369316499"
-        }
+    Supported commands:
+      {"action":"send","text":"Hi there!"}
+      {"action":"send","file_name":"abc.jpg","file_base64":"...","text":"optional caption"}
+      {"action":"typing_start"}
+      {"action":"typing_stop"}
+      {"action":"ping"}
+      {"action":"stop"}
 
-      2️⃣ Send message:
-        {
-          "action": "send",
-          "phone": "8801731979364",
-          "chat_id": "9181472862369316499",
-          "access_hash": "89021312341",
-          "text": "Hello Telegram!"
-        }
-
-      3️⃣ Receive:
-        {
-          "action": "new_message",
-          "phone": "8801731979364",
-          "chat_id": "9181472862369316499",
-          "text": "Hey there!",
-          "sender_name": "John",
-          "date": "2025-10-14T04:12:00Z"
-        }
-
-      4️⃣ Stop:
-        {"action": "stop"}
+    Server pushes:
+      {"action":"new_message", ...}
+      {"action":"typing", "typing":true,  ...}
+      {"action":"typing_stopped", ...}
+      {"action":"upload_progress", "progress":50.0}
+    ----------------------------------------------------------
     """
 
-    print("🔗 [chat_ws] WebSocket connected")
+    print("🔗 [chat_ws] connected")
     tg_client = None
-    chat_id = None
     phone = None
+    chat_id = None
     loop = None
 
+    import base64, json, time
+    from datetime import datetime, timezone
+    from telethon import events, functions, types
+    from telethon.tl.types import (
+        InputPeerUser, InputPeerChannel, InputPeerChat,
+        UpdateUserTyping, UpdateChatUserTyping, UpdateChannelUserTyping
+    )
+    from io import BytesIO
+    import threading, asyncio
+
+    # Track typing users
+    typing_tracker = {}
+    tracker_lock = threading.Lock()
+    TYPING_TTL = 6.0  # seconds
+
+    # Background cleaner: emits typing_stopped when TTL expires
+    def typing_cleaner():
+        while True:
+            time.sleep(2.0)
+            now = time.time()
+            to_stop = []
+            with tracker_lock:
+                for key, last in list(typing_tracker.items()):
+                    if now - last > TYPING_TTL:
+                        to_stop.append(key)
+                        typing_tracker.pop(key, None)
+            for (cid, uid) in to_stop:
+                try:
+                    ws.send(json.dumps({
+                        "action": "typing_stopped",
+                        "phone": phone,
+                        "chat_id": str(cid),
+                        "sender_id": uid,
+                        "date": datetime.now(timezone.utc).isoformat()
+                    }))
+                except Exception as e:
+                    print(f"⚠️ typing_stopped send failed: {e}")
+
+    threading.Thread(target=typing_cleaner, daemon=True).start()
+
+    # Step 1️⃣ INIT
     try:
-        # =====================================================
-        # 1️⃣ First client message: phone + chat_id
-        # =====================================================
-        msg = ws.receive()
-        if msg is None:
+        init_msg = ws.receive()
+        if not init_msg:
             return
-
-        data = json.loads(msg)
-        phone = data.get("phone")
-        chat_id = data.get("chat_id")
-
+        init = json.loads(init_msg)
+        phone = init.get("phone")
+        chat_id = init.get("chat_id")
+        access_hash = init.get("access_hash")
         if not all([phone, chat_id]):
             ws.send(json.dumps({"status": "error", "detail": "phone/chat_id missing"}))
             return
 
-        # =====================================================
-        # 2️⃣ Background listener setup
-        # =====================================================
-        async def run_chat_listener():
+        # Step 2️⃣ Connect Telegram client
+        async def run_listener():
             nonlocal tg_client, loop
             tg_client = await get_client(phone)
             loop = asyncio.get_event_loop()
             await tg_client.connect()
-
             if not await tg_client.is_user_authorized():
                 ws.send(json.dumps({"status": "error", "detail": "not authorized"}))
                 await tg_client.disconnect()
                 return
 
-            ws.send(json.dumps({"status": "listening", "chat_id": chat_id}))
-            print(f"👂 [chat_ws] Listening to chat {chat_id} for {phone}")
+            ws.send(json.dumps({"status": "listening", "chat_id": str(chat_id)}))
+            print(f"👂 Listening for chat {chat_id} ({phone})")
 
-            # 🔹 Event: new message from Telegram
+            # New message handler for this chat
             @tg_client.on(events.NewMessage(chats=int(chat_id)))
-            async def handler(event):
+            async def on_new_msg(event):
                 try:
                     sender = await event.get_sender()
-                    payload = {
+                    ws.send(json.dumps({
                         "action": "new_message",
                         "phone": phone,
-                        "chat_id": chat_id,
+                        "chat_id": str(chat_id),
                         "text": event.raw_text,
+                        "sender_id": getattr(sender, "id", None),
                         "sender_name": getattr(sender, "first_name", None),
                         "date": event.date.isoformat() if event.date else None
-                    }
-                    ws.send(json.dumps(payload))
-                    print(f"📨 [chat_ws] New message from chat {chat_id}: {payload['text']}")
+                    }))
                 except Exception as e:
-                    print(f"⚠️ [chat_ws] handler error: {e}")
+                    print(f"⚠️ new_message error: {e}")
+
+            # Typing detector
+            @tg_client.on(events.Raw)
+            async def on_raw(update):
+                try:
+                    upd_chat_id = None
+                    user_id = None
+                    action = None
+
+                    if isinstance(update, UpdateUserTyping):
+                        upd_chat_id = int(update.user_id)
+                        user_id = int(update.user_id)
+                        action = "typing"
+
+                    elif isinstance(update, UpdateChatUserTyping):
+                        upd_chat_id = int(update.chat_id)
+                        user_id = int(update.user_id)
+                        action = "typing"
+
+                    elif isinstance(update, UpdateChannelUserTyping):
+                        upd_chat_id = int(update.channel_id)
+                        user_id = int(update.user_id)
+                        action = "typing"
+
+                    if upd_chat_id and int(upd_chat_id) == int(chat_id):
+                        with tracker_lock:
+                            typing_tracker[(upd_chat_id, user_id)] = time.time()
+                        ws.send(json.dumps({
+                            "action": "typing",
+                            "phone": phone,
+                            "chat_id": str(upd_chat_id),
+                            "sender_id": user_id,
+                            "typing": True,
+                            "date": datetime.now(timezone.utc).isoformat()
+                        }))
+                except Exception as e:
+                    print(f"⚠️ typing event error: {e}")
 
             await tg_client.run_until_disconnected()
 
-        # Run listener thread
-        threading.Thread(target=lambda: asyncio.run(run_chat_listener()), daemon=True).start()
+        threading.Thread(target=lambda: asyncio.run(run_listener()), daemon=True).start()
 
-        # =====================================================
-        # 3️⃣ WebSocket main loop for incoming commands
-        # =====================================================
+        # Helper: resolve Telegram entity
+        async def resolve_entity():
+            try:
+                if access_hash:
+                    try:
+                        return InputPeerUser(int(chat_id), int(access_hash))
+                    except:
+                        try:
+                            return InputPeerChannel(int(chat_id), int(access_hash))
+                        except:
+                            return InputPeerChat(int(chat_id))
+                else:
+                    async for _ in tg_client.iter_dialogs():
+                        pass
+                    return await tg_client.get_entity(int(chat_id))
+            except:
+                return InputPeerChat(int(chat_id))
+
+        # Step 3️⃣ Command loop
         while True:
             recv = ws.receive()
             if recv is None:
                 break
+            data = json.loads(recv)
+            action = data.get("action")
 
-            try:
-                data = json.loads(recv)
-                action = data.get("action")
+            if action == "stop":
+                print("🛑 stop received")
+                break
 
-                # 🛑 Stop listener
-                if action == "stop":
-                    print("🛑 [chat_ws] Stop command received")
-                    break
+            elif action == "ping":
+                ws.send(json.dumps({"status": "pong"}))
 
-                # ✅ SEND message
-                elif action == "send":
-                    text = data.get("text")
-                    access_hash = data.get("access_hash")
-                    if not text:
-                        ws.send(json.dumps({"status": "error", "detail": "text missing"}))
-                        continue
+            elif action == "typing_start":
+                async def do_typing_start():
+                    try:
+                        peer = await resolve_entity()
+                        await tg_client(functions.messages.SetTypingRequest(
+                            peer=peer, action=types.SendMessageTypingAction()
+                        ))
+                        ws.send(json.dumps({"status": "typing_started"}))
+                    except Exception as e:
+                        ws.send(json.dumps({"status": "error", "detail": str(e)}))
+                asyncio.run_coroutine_threadsafe(do_typing_start(), loop)
 
-                    async def send_msg():
-                        try:
-                            if not tg_client or not await tg_client.is_user_authorized():
-                                ws.send(json.dumps({"status": "error", "detail": "not authorized"}))
-                                return
+            elif action == "typing_stop":
+                async def do_typing_stop():
+                    try:
+                        peer = await resolve_entity()
+                        await tg_client(functions.messages.SetTypingRequest(
+                            peer=peer, action=types.SendMessageCancelAction()
+                        ))
+                        ws.send(json.dumps({"status": "typing_stopped"}))
+                    except Exception as e:
+                        ws.send(json.dumps({"status": "error", "detail": str(e)}))
+                asyncio.run_coroutine_threadsafe(do_typing_stop(), loop)
 
-                            # ✅ Entity resolve
-                            entity = None
-                            try:
-                                # If access_hash provided, construct InputPeer manually
-                                if access_hash:
-                                    try:
-                                        entity = InputPeerUser(int(chat_id), int(access_hash))
-                                    except Exception:
-                                        try:
-                                            entity = InputPeerChannel(int(chat_id), int(access_hash))
-                                        except Exception:
-                                            entity = InputPeerChat(int(chat_id))
-                                else:
-                                    entity = await tg_client.get_entity(int(chat_id))
-                            except Exception as e:
-                                ws.send(json.dumps({
-                                    "status": "error",
-                                    "detail": f"Entity resolve failed: {str(e)}"
-                                }))
-                                return
+            elif action == "send":
+                text = data.get("text")
+                file_b64 = data.get("file_base64")
+                file_name = data.get("file_name", "photo.jpg")
 
-                            # ✅ Send Telegram message
-                            await tg_client.send_message(entity, text)
+                async def do_send():
+                    try:
+                        if not await tg_client.is_user_authorized():
+                            ws.send(json.dumps({"status": "error", "detail": "not authorized"}))
+                            return
+
+                        peer = await resolve_entity()
+
+                        # 🔹 Send text
+                        if text and not file_b64:
+                            await tg_client.send_message(peer, text)
                             ws.send(json.dumps({
-                                "status": "sent",
-                                "chat_id": chat_id,
-                                "text": text
+                                "status": "sent_text",
+                                "text": text,
+                                "chat_id": str(chat_id)
                             }))
-                            print(f"✅ [chat_ws] Sent to chat {chat_id}: {text}")
 
-                        except Exception as e:
-                            print(f"⚠️ [chat_ws] send_msg error: {e}")
-                            ws.send(json.dumps({"status": "error", "detail": str(e)}))
+                        # 🔹 Send image/file (direct to Telegram)
+                        elif file_b64:
+                            file_bytes = base64.b64decode(file_b64)
+                            bio = BytesIO(file_bytes)
+                            bio.name = file_name
 
-                    # ✅ Run safely inside same event loop
-                    if loop and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(send_msg(), loop)
-                    else:
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        new_loop.run_until_complete(send_msg())
+                            def progress(sent, total):
+                                try:
+                                    ws.send(json.dumps({
+                                        "action": "upload_progress",
+                                        "progress": round(sent / total * 100, 1)
+                                    }))
+                                except:
+                                    pass
 
-                # 🔄 Optional Ping
-                elif action == "ping":
-                    ws.send(json.dumps({"status": "pong"}))
+                            await tg_client.send_file(
+                                peer, bio, caption=text or "",
+                                progress_callback=progress
+                            )
+                            ws.send(json.dumps({
+                                "status": "sent_file",
+                                "file_name": file_name,
+                                "chat_id": str(chat_id)
+                            }))
+                    except Exception as e:
+                        ws.send(json.dumps({"status": "error", "detail": str(e)}))
 
-                else:
-                    ws.send(json.dumps({"status": "error", "detail": "unknown action"}))
+                asyncio.run_coroutine_threadsafe(do_send(), loop)
 
-            except Exception as e:
-                print(f"⚠️ [chat_ws] Error: {e}")
-                ws.send(json.dumps({"status": "error", "detail": str(e)}))
+            else:
+                ws.send(json.dumps({"status": "error", "detail": "unknown action"}))
 
     except Exception as e:
-        print(f"⚠️ [chat_ws] Unexpected error: {e}")
-
+        print(f"⚠️ [chat_ws] Exception: {e}")
     finally:
         if tg_client:
             try:
                 asyncio.run(tg_client.disconnect())
             except:
                 pass
-        print("❌ [chat_ws] WebSocket disconnected")
+        print("❌ [chat_ws] disconnected")
 
 
 
@@ -401,6 +817,19 @@ def chat_ws(ws):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+#################################################################################
 
 
 
