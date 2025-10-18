@@ -1,11 +1,14 @@
 
-
 import os
 import asyncio
 import threading
+import uuid
+import base64
+import time
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, redirect, send_file
 from flask_sock import Sock
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import (
     PhoneCodeInvalidError,
@@ -13,10 +16,14 @@ from telethon.errors import (
     PhoneNumberInvalidError,
 )
 from pymongo import MongoClient
-from datetime import datetime, timezone
 from io import BytesIO
-from flask_socketio import SocketIO, emit
-from telethon import events
+
+
+
+
+
+
+
 
 # ==================================
 # ⚙️ CONFIGURATION
@@ -1089,6 +1096,85 @@ def get_messages():
 
 
 
+# ==================================
+# 🏁 QR code Scanner
+# ==================================
+
+
+
+
+import uuid, asyncio, threading, base64
+from datetime import datetime, timezone, timedelta
+from flask import jsonify, request
+from telethon import TelegramClient
+
+
+
+# ✅ Shared global cache
+QR_CACHE = {}
+QR_COLLECTION = db.qr_sessions
+
+# ✅ 1️⃣ Generate Telegram QR Login Link
+
+
+
+@app.route("/login_qr_link", methods=["POST"])
+def login_qr_link():
+    """
+    ✅ FIXED VERSION
+    Works on Python 3.12 + Flask + Telethon 1.36+
+    """
+    import uuid
+    import concurrent.futures
+    from datetime import datetime, timezone
+
+    try:
+        auth_id = str(uuid.uuid4())
+
+        async def do_qr_create():
+            # সবকিছু asyncio loop-এর ভিতরে চলবে
+            client = TelegramClient(f"qr_{auth_id}", API_ID, API_HASH)
+            await client.connect()
+
+            if await client.is_user_authorized():
+                me = await client.get_me()
+                await client.disconnect()
+                return {"status": "already_authorized", "user": me.to_dict()}
+
+            qr = await client.qr_login()
+
+            # Cache & DB update
+            QR_CACHE[auth_id] = {"client": client, "qr": qr}
+            QR_COLLECTION.update_one(
+                {"auth_id": auth_id},
+                {"$set": {
+                    "auth_id": auth_id,
+                    "qr_url": qr.url,
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc)
+                }},
+                upsert=True
+            )
+
+            print(f"✅ QR created: {auth_id}")
+            print(f"🔗 {qr.url}")
+
+            # Background watcher (detect approve)
+            asyncio.create_task(wait_for_qr(auth_id))
+            return {"status": "ok", "auth_id": auth_id, "qr_url": qr.url}
+
+        # 🔹 সব async কাজ global loop-এ পাঠাও (thread-safe ভাবে)
+        future = asyncio.run_coroutine_threadsafe(do_qr_create(), loop)
+        result = future.result(timeout=15)
+
+        return jsonify(result)
+
+    except concurrent.futures.TimeoutError:
+        return jsonify({"status": "error", "detail": "QR creation timeout"}), 500
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "detail": str(e)}), 500
 
 
 
@@ -1108,6 +1194,91 @@ def get_messages():
 
 
 
+# ✅ 2️⃣ Wait for QR Authorization
+async def wait_for_qr(auth_id: str):
+    """
+    🔁 Fixed version: handles delayed QR approval properly.
+    """
+    import traceback, base64, asyncio
+    try:
+        cache = QR_CACHE.get(auth_id)
+        if not cache:
+            print(f"⚠️ No cache found for {auth_id}")
+            return
+
+        client = cache["client"]
+        qr = cache["qr"]
+
+        if not client.is_connected():
+            await client.connect()
+
+        print(f"⌛ [wait_for_qr] Waiting for Telegram auth for {auth_id}")
+
+        # 🔹 Wait until user scans QR (keep alive for long polling)
+        user = None
+        for attempt in range(12):  # wait up to 12 * 50s = 10 minutes
+            try:
+                user = await asyncio.wait_for(qr.wait(), timeout=50)
+                if user:
+                    break
+            except asyncio.TimeoutError:
+                # keep alive check
+                if not client.is_connected():
+                    await client.connect()
+                print(f"⏳ waiting... ({attempt+1}/12)")
+                continue
+
+        if not user:
+            print(f"⏰ Timeout: No authorization for {auth_id}")
+            QR_COLLECTION.update_one(
+                {"auth_id": auth_id},
+                {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
+            )
+            await client.disconnect()
+            return
+
+        # ✅ Authorized user
+        phone = getattr(user, "phone", None) or f"qr_{auth_id[:8]}"
+        print(f"✅ Telegram QR Authorized → {user.first_name} ({phone})")
+
+        await save_session(phone, client)
+
+        # --- Make JSON-safe ---
+        def make_json_safe(obj):
+            if isinstance(obj, dict):
+                return {k: make_json_safe(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [make_json_safe(v) for v in obj]
+            elif isinstance(obj, bytes):
+                return base64.b64encode(obj).decode("utf-8")
+            elif isinstance(obj, datetime):
+                return obj.isoformat()
+            else:
+                return obj
+
+        user_data = make_json_safe(user.to_dict())
+
+        # ✅ MongoDB update
+        QR_COLLECTION.update_one(
+            {"auth_id": auth_id},
+            {"$set": {
+                "status": "authorized",
+                "user": user_data,
+                "updated_at": datetime.now(timezone.utc)
+            }},
+            upsert=True
+        )
+
+        print(f"💾 MongoDB updated → authorized for {auth_id}")
+        await client.disconnect()
+
+    except Exception as e:
+        print(f"❌ Fatal in wait_for_qr: {e}")
+        print(traceback.format_exc())
+        try:
+            await client.disconnect()
+        except:
+            pass
 
 
 
@@ -1126,6 +1297,101 @@ def get_messages():
 
 
 
+
+# ✅ 3️⃣ Check QR Login Status
+@app.route("/login_qr_status", methods=["GET"])
+def login_qr_status():
+    """
+    Check Telegram QR login status by auth_id
+    """
+    auth_id = request.args.get("auth_id")
+    if not auth_id:
+        return jsonify({"status": "error", "detail": "auth_id missing"}), 400
+
+    doc = QR_COLLECTION.find_one({"auth_id": auth_id})
+    if not doc:
+        return jsonify({"status": "not_found"}), 404
+
+    created_at = doc.get("created_at")
+    if created_at:
+        now_utc = datetime.now(timezone.utc)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if now_utc - created_at > timedelta(minutes=15):
+            if doc.get("status") not in ("authorized", "error"):
+                QR_COLLECTION.update_one(
+                    {"auth_id": auth_id},
+                    {"$set": {"status": "expired", "updated_at": now_utc}}
+                )
+                doc["status"] = "expired"
+
+    # Authorized → full user data return
+    if doc.get("status") == "authorized":
+        return jsonify({"status": "authorized", "user": doc.get("user", {})})
+
+    return jsonify({
+        "auth_id": auth_id,
+        "qr_url": doc.get("qr_url"),
+        "status": doc.get("status", "pending")
+    })
+
+
+# ✅ 4️⃣ Background Cleaner
+def qr_cleaner():
+    """Periodically cleans old QR entries"""
+    while True:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=20)
+            result = QR_COLLECTION.delete_many({
+                "status": {"$in": ["authorized", "error", "expired"]},
+                "created_at": {"$lt": cutoff}
+            })
+            if result.deleted_count:
+                print(f"🧹 Cleaned {result.deleted_count} old QR entries")
+        except Exception as e:
+            print(f"⚠️ Cleaner error: {e}")
+        time.sleep(300)
+
+threading.Thread(target=qr_cleaner, daemon=True).start()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def qr_cleaner():
+    while True:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+            result = QR_COLLECTION.delete_many({
+                "status": {"$in": ["authorized", "error"]},
+                "created_at": {"$lt": cutoff}
+            })
+            if result.deleted_count:
+                print(f"🧹 Cleaned {result.deleted_count} old QR sessions")
+        except Exception as e:
+            print(f"⚠️ Cleaner error: {e}")
+        time.sleep(300)  # every 5 min
+
+# ✅ Global asyncio loop (shared for all threads)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# ✅ Start loop in background thread before Flask starts
+def run_loop_forever():
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+threading.Thread(target=run_loop_forever, daemon=True).start()
 
 
 
@@ -1134,4 +1400,5 @@ def get_messages():
 # 🏁 RUN SERVER
 # ==================================
 if __name__ == "__main__":
+    threading.Thread(target=loop.run_forever, daemon=True).start()
     app.run(host="0.0.0.0", port=8080, debug=False)
