@@ -1,11 +1,6 @@
 
 import os
 import asyncio
-import threading
-import uuid
-import base64
-import time
-from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, redirect, send_file
 from flask_sock import Sock
 from telethon import TelegramClient, events
@@ -17,13 +12,6 @@ from telethon.errors import (
 )
 from pymongo import MongoClient
 from io import BytesIO
-
-
-
-
-
-
-
 
 # ==================================
 # ⚙️ CONFIGURATION
@@ -1195,9 +1183,106 @@ def login_qr_link():
 
 
 # ✅ 2️⃣ Wait for QR Authorization
+
+
+
+
+
+
+
+# async def wait_for_qr(auth_id: str):
+#     """
+#     🔁 Fixed version: handles delayed QR approval properly.
+#     """
+#     import traceback, base64, asyncio
+#     try:
+#         cache = QR_CACHE.get(auth_id)
+#         if not cache:
+#             print(f"⚠️ No cache found for {auth_id}")
+#             return
+#
+#         client = cache["client"]
+#         qr = cache["qr"]
+#
+#         if not client.is_connected():
+#             await client.connect()
+#
+#         print(f"⌛ [wait_for_qr] Waiting for Telegram auth for {auth_id}")
+#
+#         # 🔹 Wait until user scans QR (keep alive for long polling)
+#         user = None
+#         for attempt in range(12):  # wait up to 12 * 50s = 10 minutes
+#             try:
+#                 user = await asyncio.wait_for(qr.wait(), timeout=50)
+#                 if user:
+#                     break
+#             except asyncio.TimeoutError:
+#                 # keep alive check
+#                 if not client.is_connected():
+#                     await client.connect()
+#                 print(f"⏳ waiting... ({attempt+1}/12)")
+#                 continue
+#
+#         if not user:
+#             print(f"⏰ Timeout: No authorization for {auth_id}")
+#             QR_COLLECTION.update_one(
+#                 {"auth_id": auth_id},
+#                 {"$set": {"status": "expired", "updated_at": datetime.now(timezone.utc)}}
+#             )
+#             await client.disconnect()
+#             return
+#
+#         # ✅ Authorized user
+#         phone = getattr(user, "phone", None) or f"qr_{auth_id[:8]}"
+#         print(f"✅ Telegram QR Authorized → {user.first_name} ({phone})")
+#
+#         await save_session(phone, client)
+#
+#         # --- Make JSON-safe ---
+#         def make_json_safe(obj):
+#             if isinstance(obj, dict):
+#                 return {k: make_json_safe(v) for k, v in obj.items()}
+#             elif isinstance(obj, list):
+#                 return [make_json_safe(v) for v in obj]
+#             elif isinstance(obj, bytes):
+#                 return base64.b64encode(obj).decode("utf-8")
+#             elif isinstance(obj, datetime):
+#                 return obj.isoformat()
+#             else:
+#                 return obj
+#
+#         user_data = make_json_safe(user.to_dict())
+#
+#         # ✅ MongoDB update
+#         QR_COLLECTION.update_one(
+#             {"auth_id": auth_id},
+#             {"$set": {
+#                 "status": "authorized",
+#                 "user": user_data,
+#                 "updated_at": datetime.now(timezone.utc)
+#             }},
+#             upsert=True
+#         )
+#
+#         print(f"💾 MongoDB updated → authorized for {auth_id}")
+#         await client.disconnect()
+#
+#     except Exception as e:
+#         print(f"❌ Fatal in wait_for_qr: {e}")
+#         print(traceback.format_exc())
+#         try:
+#             await client.disconnect()
+#         except:
+#             pass
+
+
+
+
+# ✅ 2️⃣ Wait for QR Authorization (Final Fixed)
+# ✅ 2️⃣ Wait for QR Authorization (Final Fixed)
 async def wait_for_qr(auth_id: str):
     """
-    🔁 Fixed version: handles delayed QR approval properly.
+    🔁 Waits for Telegram QR authorization, saves session, and updates MongoDB.
     """
     import traceback, base64, asyncio
     try:
@@ -1214,18 +1299,16 @@ async def wait_for_qr(auth_id: str):
 
         print(f"⌛ [wait_for_qr] Waiting for Telegram auth for {auth_id}")
 
-        # 🔹 Wait until user scans QR (keep alive for long polling)
         user = None
-        for attempt in range(12):  # wait up to 12 * 50s = 10 minutes
+        for attempt in range(12):  # wait up to 10 minutes
             try:
                 user = await asyncio.wait_for(qr.wait(), timeout=50)
                 if user:
                     break
             except asyncio.TimeoutError:
-                # keep alive check
                 if not client.is_connected():
                     await client.connect()
-                print(f"⏳ waiting... ({attempt+1}/12)")
+                print(f"⏳ waiting... ({attempt + 1}/12)")
                 continue
 
         if not user:
@@ -1237,13 +1320,18 @@ async def wait_for_qr(auth_id: str):
             await client.disconnect()
             return
 
-        # ✅ Authorized user
-        phone = getattr(user, "phone", None) or f"qr_{auth_id[:8]}"
+        # ✅ Authorized user found
+        phone = getattr(user, "phone", None)
+        if not phone:
+            # যদি Telegram user ফোন নম্বর না দেয় (bot / anonymous)
+            phone = f"qr_{auth_id[:8]}"
+
         print(f"✅ Telegram QR Authorized → {user.first_name} ({phone})")
 
+        # ✅ Save Telegram session
         await save_session(phone, client)
 
-        # --- Make JSON-safe ---
+        # ✅ Convert safely to JSON
         def make_json_safe(obj):
             if isinstance(obj, dict):
                 return {k: make_json_safe(v) for k, v in obj.items()}
@@ -1258,18 +1346,19 @@ async def wait_for_qr(auth_id: str):
 
         user_data = make_json_safe(user.to_dict())
 
-        # ✅ MongoDB update
+        # ✅ MongoDB update with phone + status
         QR_COLLECTION.update_one(
             {"auth_id": auth_id},
             {"$set": {
                 "status": "authorized",
                 "user": user_data,
+                "phone": phone,
                 "updated_at": datetime.now(timezone.utc)
             }},
             upsert=True
         )
 
-        print(f"💾 MongoDB updated → authorized for {auth_id}")
+        print(f"💾 MongoDB updated → authorized for {auth_id} ({phone})")
         await client.disconnect()
 
     except Exception as e:
@@ -1279,9 +1368,6 @@ async def wait_for_qr(auth_id: str):
             await client.disconnect()
         except:
             pass
-
-
-
 
 
 
