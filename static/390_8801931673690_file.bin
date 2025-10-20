@@ -1,0 +1,880 @@
+{
+	"info": {
+		"_postman_id": "2f74b877-c971-4a68-b89c-b58cdbd4315d",
+		"name": "Telegram_api",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "20423087",
+		"_collection_link": "https://winter-satellite-579534.postman.co/workspace/Team-Workspace~2c683d50-d40c-4be2-8d4c-241fd5788953/collection/20423087-2f74b877-c971-4a68-b89c-b58cdbd4315d?action=share&source=collection_link&creator=20423087"
+	},
+	"item": [
+		{
+			"name": "login",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "phone",
+							"value": "+8801606100833",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://localhost:8080/login",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"login"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "http://localhost:8080/login",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "phone",
+									"value": "+8801606100833",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "http://localhost:8080/login",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"login"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Wed, 08 Oct 2025 11:18:01 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "62"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"phone_code_hash\": \"850ec99b0ce9010f58\",\n    \"status\": \"code_sent\"\n}"
+				}
+			]
+		},
+		{
+			"name": "varify",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "phone",
+							"value": "+8801731979364",
+							"type": "text"
+						},
+						{
+							"key": "code",
+							"value": "48199",
+							"type": "text"
+						},
+						{
+							"key": "phone_code_hash",
+							"value": "07e6122396e18ad009",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://127.0.0.1:8080/verify",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"verify"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "varify",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "phone",
+									"value": "+880 17 937 22202",
+									"type": "text"
+								},
+								{
+									"key": "code",
+									"value": "85129",
+									"type": "text"
+								},
+								{
+									"key": "phone_code_hash",
+									"value": "c9807772be6229a968",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "http://127.0.0.1:8080/verify",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"verify"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Sun, 12 Oct 2025 06:59:44 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "92"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"detail\": \"Two-step verification password needed for this account\",\n    \"status\": \"2fa_required\"\n}"
+				},
+				{
+					"name": "varify",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "phone",
+									"value": "+8801731979364",
+									"type": "text"
+								},
+								{
+									"key": "code",
+									"value": "48199",
+									"type": "text"
+								},
+								{
+									"key": "phone_code_hash",
+									"value": "07e6122396e18ad009",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "http://127.0.0.1:8080/verify",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"verify"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Mon, 13 Oct 2025 12:44:07 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "1203"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"already_authorized\",\n    \"user\": {\n        \"access_hash\": 3945986491613997716,\n        \"apply_min_photo\": true,\n        \"attach_menu_enabled\": false,\n        \"bot\": false,\n        \"bot_active_users\": null,\n        \"bot_attach_menu\": false,\n        \"bot_business\": false,\n        \"bot_can_edit\": false,\n        \"bot_chat_history\": false,\n        \"bot_has_main_app\": false,\n        \"bot_info_version\": null,\n        \"bot_inline_geo\": false,\n        \"bot_inline_placeholder\": null,\n        \"bot_nochats\": false,\n        \"bot_verification_icon\": null,\n        \"close_friend\": false,\n        \"color\": null,\n        \"contact\": false,\n        \"contact_require_premium\": false,\n        \"deleted\": false,\n        \"emoji_status\": null,\n        \"fake\": false,\n        \"first_name\": \"小美\",\n        \"id\": 7216261663,\n        \"is_self\": true,\n        \"lang_code\": null,\n        \"last_name\": null,\n        \"min\": false,\n        \"mutual_contact\": false,\n        \"phone\": \"8801731979364\",\n        \"photo\": {\n            \"dc_id\": 5,\n            \"has_video\": false,\n            \"personal\": false,\n            \"photo_id\": 6244245629744302038,\n            \"stripped_thumb\": \"AQgIjVV3leckcH+YoooqCz8=\",\n            \"type\": \"UserProfilePhoto\"\n        },\n        \"premium\": false,\n        \"profile_color\": null,\n        \"restricted\": false,\n        \"restriction_reason\": [],\n        \"scam\": false,\n        \"send_paid_messages_stars\": null,\n        \"status\": {\n            \"type\": \"UserStatusOffline\",\n            \"was_online\": \"2025-10-13T12:44:02+00:00\"\n        },\n        \"stories_hidden\": false,\n        \"stories_max_id\": null,\n        \"stories_unavailable\": true,\n        \"support\": false,\n        \"type\": \"User\",\n        \"username\": \"HZ166688\",\n        \"usernames\": [],\n        \"verified\": false\n    }\n}"
+				}
+			]
+		},
+		{
+			"name": "all chat",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8080/dialogs?phone=+8801606100833",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"dialogs"
+					],
+					"query": [
+						{
+							"key": "phone",
+							"value": "+8801606100833"
+						}
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "all chat",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://127.0.0.1:8080/dialogs?phone=+8801606100833",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"dialogs"
+							],
+							"query": [
+								{
+									"key": "phone",
+									"value": "+8801606100833"
+								}
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Fri, 10 Oct 2025 09:55:51 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "13074"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"count\": 22,\n    \"dialogs\": [\n        {\n            \"about\": null,\n            \"access_hash\": -3203859540838759936,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Recent\",\n            \"has_photo\": false,\n            \"id\": 7877032355,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-10-10T08:52:45+00:00\",\n                \"id\": 991,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": \"✅ Flask API login successful!\"\n            },\n            \"last_name\": \"Ahmed\",\n            \"name\": \"NafimAhmedRecent\",\n            \"participants_count\": null,\n            \"phone\": \"8801606100833\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"NafimAhmedRecent\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -8800111718790217077,\n            \"bot\": false,\n            \"dc_id\": 1,\n            \"fake\": false,\n            \"first_name\": \"Telegram\",\n            \"has_photo\": true,\n            \"id\": 777000,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-10-10T08:52:33+00:00\",\n                \"id\": 990,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": \"Login code: 26507. Do not give this code to anyone, even if they say they are from Telegram!\\n\\n❗️This code can be used to log in to your Telegram account. We never ask it for anything else.\\n\\nIf you didn't request this code by trying to log in on another device, simply ignore this message.\"\n            },\n            \"last_name\": null,\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"42777\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": true\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 5770133614933536120,\n            \"bot\": false,\n            \"dc_id\": 5,\n            \"fake\": false,\n            \"first_name\": \"Nafim\",\n            \"has_photo\": true,\n            \"id\": 8044864440,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-10-10T08:49:03+00:00\",\n                \"id\": 989,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"this is test hit\"\n            },\n            \"last_name\": \"Flutter Dev.\",\n            \"name\": \"NafimFlutterDev\",\n            \"participants_count\": null,\n            \"phone\": \"8801710521050\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"NafimFlutterDev\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 8919307742585178728,\n            \"bot\": false,\n            \"dc_id\": 5,\n            \"fake\": false,\n            \"first_name\": \"Tamjid Dev\",\n            \"has_photo\": true,\n            \"id\": 7836318303,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-10-08T08:30:49+00:00\",\n                \"id\": 940,\n                \"media\": \"MessageMediaPhoto\",\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"\"\n            },\n            \"last_name\": null,\n            \"name\": \"TamjidPythonDev\",\n            \"participants_count\": null,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"TamjidPythonDev\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 8015692139511684552,\n            \"bot\": false,\n            \"dc_id\": 4,\n            \"fake\": false,\n            \"first_name\": \"YüSäSïf\",\n            \"has_photo\": true,\n            \"id\": 8423276264,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-09-24T14:40:40+00:00\",\n                \"id\": 919,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": \"D_Y_B_O\",\n            \"participants_count\": null,\n            \"phone\": \"2348108201901\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"D_Y_B_O\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 5254007758860224990,\n            \"bot\": false,\n            \"dc_id\": 5,\n            \"fake\": false,\n            \"first_name\": \"Hasina\",\n            \"has_photo\": true,\n            \"id\": 8307852626,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-09-08T18:51:17+00:00\",\n                \"id\": 918,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": \"inaya_06\",\n            \"participants_count\": null,\n            \"phone\": \"8801786358795\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"inaya_06\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -880620436364141097,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Xray Body Scanner\",\n            \"has_photo\": false,\n            \"id\": 8213682590,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-08-22T09:59:00+00:00\",\n                \"id\": 917,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"919173897476\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -2589371753193845553,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Kabir Stat\",\n            \"has_photo\": false,\n            \"id\": 8065187324,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-08-22T04:31:21+00:00\",\n                \"id\": 916,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"8801770727033\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 3378630093071938915,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Zakir Hossain\",\n            \"has_photo\": false,\n            \"id\": 8337722434,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-08-10T03:22:49+00:00\",\n                \"id\": 915,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"8801724748906\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -7506317213806695498,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Ratri Agent Ho\",\n            \"has_photo\": false,\n            \"id\": 8096297798,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-07-29T06:28:33+00:00\",\n                \"id\": 914,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"8801733643897\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 3029421738683433192,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": null,\n            \"has_photo\": false,\n            \"id\": -1002895353752,\n            \"is_channel\": true,\n            \"is_group\": true,\n            \"is_user\": false,\n            \"last_message\": {\n                \"date\": \"2025-07-17T08:34:07+00:00\",\n                \"id\": 267,\n                \"media\": \"MessageMediaDocument\",\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"\"\n            },\n            \"last_name\": null,\n            \"name\": \"test0051\",\n            \"participants_count\": 6,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": \"test0051\",\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -443877862620778884,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": null,\n            \"has_photo\": false,\n            \"id\": -1002615914992,\n            \"is_channel\": true,\n            \"is_group\": true,\n            \"is_user\": false,\n            \"last_message\": {\n                \"date\": \"2025-07-17T08:32:52+00:00\",\n                \"id\": 1271,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"+8000\"\n            },\n            \"last_name\": null,\n            \"name\": \"2323\",\n            \"participants_count\": 5,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": \"2323\",\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": 2435956838893985094,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Tanjib\",\n            \"has_photo\": false,\n            \"id\": 7542700648,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-07-14T11:08:20+00:00\",\n                \"id\": 913,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"ws://127.0.0.1:8000/ws/chat\"\n            },\n            \"last_name\": \"Qubly\",\n            \"name\": \"Ajhxjaj\",\n            \"participants_count\": null,\n            \"phone\": \"8801727300421\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"Ajhxjaj\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": null,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": null,\n            \"has_photo\": false,\n            \"id\": -4636731528,\n            \"is_channel\": false,\n            \"is_group\": true,\n            \"is_user\": false,\n            \"last_message\": {\n                \"date\": \"2025-06-26T12:24:27+00:00\",\n                \"id\": 909,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 8189428977,\n                \"text\": \"本群暂无操作人\"\n            },\n            \"last_name\": null,\n            \"name\": \"test005\",\n            \"participants_count\": 6,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": \"test005\",\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -5835411931111630089,\n            \"bot\": false,\n            \"dc_id\": 5,\n            \"fake\": false,\n            \"first_name\": \"Jahid Hosen Qubely\",\n            \"has_photo\": true,\n            \"id\": 7490965446,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-06-24T15:56:56+00:00\",\n                \"id\": 728,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"8801901447028\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": null,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": null,\n            \"has_photo\": false,\n            \"id\": -4953979645,\n            \"is_channel\": false,\n            \"is_group\": true,\n            \"is_user\": false,\n            \"last_message\": {\n                \"date\": \"2025-06-24T10:11:34+00:00\",\n                \"id\": 719,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 8044864440,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": \"test0051\",\n            \"participants_count\": 0,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": \"test0051\",\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -1632511284651789668,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Md\",\n            \"has_photo\": false,\n            \"id\": 6807865707,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-05-29T09:54:10+00:00\",\n                \"id\": 57,\n                \"media\": \"MessageMediaDocument\",\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": \"\"\n            },\n            \"last_name\": \"Khaled Qubely\",\n            \"name\": \"KD2211\",\n            \"participants_count\": null,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"KD2211\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -7567027029401504592,\n            \"bot\": false,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"naya\",\n            \"has_photo\": false,\n            \"id\": 7749946702,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-05-27T19:57:32+00:00\",\n                \"id\": 56,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": null\n            },\n            \"last_name\": \"Naowar\",\n            \"name\": null,\n            \"participants_count\": null,\n            \"phone\": \"8801773530358\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": null,\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -8287128091775759251,\n            \"bot\": true,\n            \"dc_id\": null,\n            \"fake\": false,\n            \"first_name\": \"Accountant\",\n            \"has_photo\": false,\n            \"id\": 8013142351,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-05-22T09:46:59+00:00\",\n                \"id\": 55,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"+8000\"\n            },\n            \"last_name\": null,\n            \"name\": \"Accountant2975_bot\",\n            \"participants_count\": null,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"Accountant2975_bot\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -7584948031479600727,\n            \"bot\": false,\n            \"dc_id\": 2,\n            \"fake\": false,\n            \"first_name\": \"Irina\",\n            \"has_photo\": true,\n            \"id\": 6463786238,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-05-15T09:03:28+00:00\",\n                \"id\": 33,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": \"How are you ???\"\n            },\n            \"last_name\": null,\n            \"name\": \"shevchenkodev\",\n            \"participants_count\": null,\n            \"phone\": \"380999750549\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"shevchenkodev\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -8997096899776157829,\n            \"bot\": false,\n            \"dc_id\": 5,\n            \"fake\": false,\n            \"first_name\": \"Hakim\",\n            \"has_photo\": true,\n            \"id\": 1104377676,\n            \"is_channel\": false,\n            \"is_group\": false,\n            \"is_user\": true,\n            \"last_message\": {\n                \"date\": \"2025-05-08T12:18:17+00:00\",\n                \"id\": 1,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": 7877032355,\n                \"text\": null\n            },\n            \"last_name\": null,\n            \"name\": \"Hakim2362\",\n            \"participants_count\": null,\n            \"phone\": \"8801748614320\",\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": null,\n            \"unread_count\": 0,\n            \"username\": \"Hakim2362\",\n            \"verified\": false\n        },\n        {\n            \"about\": null,\n            \"access_hash\": -8697605345280406923,\n            \"bot\": false,\n            \"dc_id\": 2,\n            \"fake\": false,\n            \"first_name\": null,\n            \"has_photo\": true,\n            \"id\": -1001480429121,\n            \"is_channel\": true,\n            \"is_group\": false,\n            \"is_user\": false,\n            \"last_message\": {\n                \"date\": \"2020-06-18T06:42:41+00:00\",\n                \"id\": 3,\n                \"media\": null,\n                \"reply_to\": null,\n                \"sender_id\": null,\n                \"text\": \"I can help you create and manage Telegram bots. If you're new to the Bot API, please see the manual.\\n\\nYou can control me by sending these commands:\\n\\n/newbot - create a new bot\\n/mybots - edit your bots [beta]\\n\\nEdit Bots\\n/setname - change a bot's name\\n/setdescription - change bot description\\n/setabouttext - change bot about info\\n/setuserpic - change bot profile photo\\n/setcommands - change the list of commands\\n/deletebot - delete a bot\\n\\nBot Settings\\n/token - generate authorization token\\n/revoke - revoke bot access token\\n/setinline - toggle inline mode\\n/setinlinegeo - toggle inline location requests\\n/setinlinefeedback - change inline feedback settings\\n/setjoingroups - can your bot be added to groups?\\n/setprivacy - toggle privacy mode in groups\\n\\nGames\\n/mygames - edit your games [beta]\\n/newgame - create a new game\\n/listgames - get a list of your games\\n/editgame - edit a game\\n/deletegame - delete an existing game\"\n            },\n            \"last_name\": null,\n            \"name\": \"Bot Father\",\n            \"participants_count\": 101786,\n            \"phone\": null,\n            \"pinned\": false,\n            \"premium\": false,\n            \"restricted\": false,\n            \"scam\": false,\n            \"title\": \"Bot Father\",\n            \"unread_count\": 0,\n            \"username\": \"botfathermeb\",\n            \"verified\": false\n        }\n    ],\n    \"status\": \"ok\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Send message",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "phone",
+							"value": "+8801606100833",
+							"type": "text"
+						},
+						{
+							"key": "to",
+							"value": "@NafimFlutterDev",
+							"type": "text"
+						},
+						{
+							"key": "text",
+							"value": "Hello from Flask Telegram API!",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://127.0.0.1:8080/send",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"send"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "Send message",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "phone",
+									"value": "+8801606100833",
+									"type": "text"
+								},
+								{
+									"key": "to",
+									"value": "@NafimFlutterDev",
+									"type": "text"
+								},
+								{
+									"key": "text",
+									"value": "Hello from Flask Telegram API!",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "http://127.0.0.1:8080/send",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"send"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Thu, 09 Oct 2025 06:42:23 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "18"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"sent\"\n}"
+				}
+			]
+		},
+		{
+			"name": "logout",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "phone",
+							"value": "+8801606100833",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://127.0.0.1:8080/logout",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"logout"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "logout",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "phone",
+									"value": "+8801606100833",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "http://127.0.0.1:8080/logout",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"logout"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Thu, 09 Oct 2025 06:44:58 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "80"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"deleted\": [\n        \"8801606100833.session\",\n        \"8801606100833.session.tmp\"\n    ],\n    \"status\": \"ok\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Image retrive",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8080/avatar_redirect?phone=+8801606100833&username=@NafimFlutterDev",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"avatar_redirect"
+					],
+					"query": [
+						{
+							"key": "phone",
+							"value": "+8801606100833"
+						},
+						{
+							"key": "username",
+							"value": "@NafimFlutterDev"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Chat room messages",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8080/messages?phone=+8801606100833&chat_id=777000\n",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"messages"
+					],
+					"query": [
+						{
+							"key": "phone",
+							"value": "+8801606100833"
+						},
+						{
+							"key": "chat_id",
+							"value": "777000\n"
+						}
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "Chat room messages",
+					"originalRequest": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://127.0.0.1:8080/messages?phone=+8801731979364&chat_id=8044864440&access_hash=9181472862369316499",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"messages"
+							],
+							"query": [
+								{
+									"key": "phone",
+									"value": "+8801731979364"
+								},
+								{
+									"key": "chat_id",
+									"value": "8044864440"
+								},
+								{
+									"key": "access_hash",
+									"value": "9181472862369316499"
+								}
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Tue, 14 Oct 2025 08:30:14 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "874"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"messages\": [\n        {\n            \"date\": \"2025-10-14T06:24:31+00:00\",\n            \"id\": 1259,\n            \"is_out\": true,\n            \"sender_id\": 7216261663,\n            \"text\": \"Test message from WebSocket 💬\"\n        },\n        {\n            \"date\": \"2025-10-14T06:24:55+00:00\",\n            \"id\": 1260,\n            \"is_out\": false,\n            \"sender_id\": null,\n            \"text\": \"hi\"\n        },\n        {\n            \"date\": \"2025-10-14T06:25:20+00:00\",\n            \"id\": 1261,\n            \"is_out\": false,\n            \"sender_id\": null,\n            \"text\": \"hallow\"\n        },\n        {\n            \"date\": \"2025-10-14T06:27:52+00:00\",\n            \"id\": 1262,\n            \"is_out\": false,\n            \"sender_id\": null,\n            \"text\": \"hi hallow\"\n        },\n        {\n            \"date\": \"2025-10-14T06:28:38+00:00\",\n            \"id\": 1263,\n            \"is_out\": false,\n            \"sender_id\": null,\n            \"text\": \"what are you doing\"\n        },\n        {\n            \"date\": \"2025-10-14T06:29:36+00:00\",\n            \"id\": 1264,\n            \"is_out\": true,\n            \"sender_id\": 7216261663,\n            \"text\": \"i am writing a code\"\n        },\n        {\n            \"date\": \"2025-10-14T06:56:07+00:00\",\n            \"id\": 1265,\n            \"is_out\": false,\n            \"sender_id\": null,\n            \"text\": \"I love you\"\n        },\n        {\n            \"date\": \"2025-10-14T06:56:28+00:00\",\n            \"id\": 1266,\n            \"is_out\": true,\n            \"sender_id\": 7216261663,\n            \"text\": \"I love you too\"\n        }\n    ],\n    \"status\": \"ok\"\n}"
+				}
+			]
+		},
+		{
+			"name": "two step password",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n           \"phone\": \"+8801731979364\",\n           \"password\": \"Radon222\"\n         }",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://127.0.0.1:8080/verify_password",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"verify_password"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "login with qr",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8080/login_qr_link",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8080",
+					"path": [
+						"login_qr_link"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "login with qr",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "http://127.0.0.1:8080/login_qr_link",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"login_qr_link"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Sat, 18 Oct 2025 07:33:51 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "140"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"auth_id\": \"f4b48998-35ea-432e-a6c9-06d3c92b18ce\",\n    \"qr_url\": \"tg://login?token=AQL9QvNo7UA5i5dWF9Snfp_YdoZJg_KycCsDHycKWciJ1A\",\n    \"status\": \"ok\"\n}"
+				}
+			]
+		},
+		{
+			"name": "status checked",
+			"request": {
+				"method": "GET",
+				"header": []
+			},
+			"response": [
+				{
+					"name": "New Request",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://127.0.0.1:8080/login_qr_status?auth_id=f4b48998-35ea-432e-a6c9-06d3c92b18ce",
+							"protocol": "http",
+							"host": [
+								"127",
+								"0",
+								"0",
+								"1"
+							],
+							"port": "8080",
+							"path": [
+								"login_qr_status"
+							],
+							"query": [
+								{
+									"key": "auth_id",
+									"value": "f4b48998-35ea-432e-a6c9-06d3c92b18ce"
+								}
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Server",
+							"value": "Werkzeug/3.1.3 Python/3.12.7"
+						},
+						{
+							"key": "Date",
+							"value": "Sat, 18 Oct 2025 07:34:23 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						},
+						{
+							"key": "Content-Length",
+							"value": "1180"
+						},
+						{
+							"key": "Connection",
+							"value": "close"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"authorized\",\n    \"user\": {\n        \"_\": \"User\",\n        \"access_hash\": 1390616541124096840,\n        \"apply_min_photo\": true,\n        \"attach_menu_enabled\": false,\n        \"bot\": false,\n        \"bot_active_users\": null,\n        \"bot_attach_menu\": false,\n        \"bot_business\": false,\n        \"bot_can_edit\": false,\n        \"bot_chat_history\": false,\n        \"bot_has_main_app\": false,\n        \"bot_info_version\": null,\n        \"bot_inline_geo\": false,\n        \"bot_inline_placeholder\": null,\n        \"bot_nochats\": false,\n        \"bot_verification_icon\": null,\n        \"close_friend\": false,\n        \"color\": null,\n        \"contact\": false,\n        \"contact_require_premium\": false,\n        \"deleted\": false,\n        \"emoji_status\": null,\n        \"fake\": false,\n        \"first_name\": \"小美\",\n        \"id\": 7798795860,\n        \"is_self\": true,\n        \"lang_code\": null,\n        \"last_name\": null,\n        \"min\": false,\n        \"mutual_contact\": false,\n        \"phone\": \"8801931673690\",\n        \"photo\": {\n            \"_\": \"UserProfilePhoto\",\n            \"dc_id\": 5,\n            \"has_video\": false,\n            \"personal\": false,\n            \"photo_id\": 6303255611353188562,\n            \"stripped_thumb\": \"AQgIYLMpbneASRx7HFFFFQbp3A==\"\n        },\n        \"premium\": false,\n        \"profile_color\": null,\n        \"restricted\": false,\n        \"restriction_reason\": [],\n        \"scam\": false,\n        \"send_paid_messages_stars\": null,\n        \"status\": {\n            \"_\": \"UserStatusOnline\",\n            \"expires\": \"2025-10-18T07:38:46+00:00\"\n        },\n        \"stories_hidden\": false,\n        \"stories_max_id\": null,\n        \"stories_unavailable\": true,\n        \"support\": false,\n        \"username\": null,\n        \"usernames\": [],\n        \"verified\": false\n    }\n}"
+				}
+			]
+		}
+	]
+}
