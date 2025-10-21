@@ -2485,25 +2485,31 @@ async def archive_incoming_event(db, phone: str, chat_id: int, access_hash: int 
     msg = event.message
     sender = await event.get_sender()
 
+    # ---- call detect first ----
     media_type = "text"
     media_fs_id = None
     file_name = None
     mime_type = None
 
-    if getattr(msg, "media", None):
-        if getattr(msg, "photo", None): media_type = "image"
-        elif getattr(msg, "video", None): media_type = "video"
-        elif getattr(msg, "voice", None): media_type = "voice"
-        elif getattr(msg, "audio", None): media_type = "audio"
-        elif getattr(msg, "sticker", None): media_type = "sticker"
-        else: media_type = "file"
+    call_media_type, call_info = _call_meta_from_msg(msg)
+    if call_media_type:
+        media_type = call_media_type
+    else:
+        # ---- normal media path ----
+        if getattr(msg, "media", None):
+            if getattr(msg, "photo", None): media_type = "image"
+            elif getattr(msg, "video", None): media_type = "video"
+            elif getattr(msg, "voice", None): media_type = "voice"
+            elif getattr(msg, "audio", None): media_type = "audio"
+            elif getattr(msg, "sticker", None): media_type = "sticker"
+            else: media_type = "file"
 
-        try:
-            blob = await msg.download_media(bytes)
-            mime_type, file_name = _guess_msg_media_meta(msg)
-            media_fs_id = _put_fs(db, blob, filename=file_name or "tg_in.bin", content_type=mime_type)
-        except Exception:
-            media_fs_id = None
+            try:
+                blob = await msg.download_media(bytes)
+                mime_type, file_name = _guess_msg_media_meta(msg)
+                media_fs_id = _put_fs(db, blob, filename=file_name or "tg_in.bin", content_type=mime_type)
+            except Exception:
+                media_fs_id = None
 
     doc = {
         "phone": phone,
@@ -2522,8 +2528,16 @@ async def archive_incoming_event(db, phone: str, chat_id: int, access_hash: int 
         "file_name": file_name,
         "mime_type": mime_type,
         "status": "arrived",
-        "deleted_on_telegram": False
+        "deleted_on_telegram": False,
     }
+
+    if call_media_type:
+        doc.update({
+            "call_status": call_info["status"],
+            "call_is_video": call_info["is_video"],
+            "call_duration": call_info["duration"],
+            "call_reason": call_info["raw_reason"],
+        })
 
     MSG_COL.update_one(
         {"phone": phone, "chat_id": int(chat_id), "msg_id": int(msg.id)},
@@ -2748,23 +2762,38 @@ def _base_url():
     # WS বা ব্যাকগ্রাউন্ড থ্রেডে থাকলে এখানে ফfallback
     return os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8080/")
 
+
+
+
+
+
+
+
+
 def _doc_to_api(phone: str, chat_id: int, access_hash: int | None, doc: dict) -> dict:
     from datetime import datetime, timezone
+
     media_type = doc.get("media_type") or "text"
 
-    # ---- absolute media_link বানাই ----
+    # ---- absolute media_link (non-text, non-call only) ----
     media_link = None
-    if media_type != "text" and doc.get("msg_id") is not None:
-        params = {
-            "phone": str(phone),
-            "chat_id": int(chat_id),
-            "msg_id": int(doc["msg_id"]),
-        }
+    if media_type not in ("text", "call_audio", "call_video") and doc.get("msg_id") is not None:
+        params = {"phone": str(phone), "chat_id": int(chat_id), "msg_id": int(doc["msg_id"])}
         if access_hash is not None:
             params["access_hash"] = int(access_hash)
-
         qs = urlencode(params, doseq=False, safe="")
         media_link = urljoin(_base_url(), f"message_media?{qs}")
+
+    # ---- normalize a small 'call' object for API consumers ----
+    call_obj = None
+    if media_type in ("call_audio", "call_video"):
+        call_obj = {
+            "status": doc.get("call_status"),
+            "duration": doc.get("call_duration"),
+            "is_video": bool(doc.get("call_is_video")),
+            "reason": doc.get("call_reason"),
+            "direction": "outgoing" if bool(doc.get("is_out")) else "incoming",
+        }
 
     return {
         "id": (doc.get("msg_id") if doc.get("msg_id") is not None else doc.get("temp_id")),
@@ -2775,17 +2804,10 @@ def _doc_to_api(phone: str, chat_id: int, access_hash: int | None, doc: dict) ->
                  if isinstance(doc.get("date"), datetime) else doc.get("date")),
         "is_out": bool(doc.get("is_out", doc.get("direction") == "out")),
         "reply_to": doc.get("reply_to"),
-        "media_type": media_type,
-        "media_link": media_link
+        "media_type": media_type,      # "text" | "image" | ... | "call_audio" | "call_video"
+        "media_link": media_link,      # None for calls/text
+        "call": call_obj               # present only for call_* types
     }
-
-
-
-
-
-
-
-
 
 
 
@@ -2794,35 +2816,40 @@ def _doc_to_api(phone: str, chat_id: int, access_hash: int | None, doc: dict) ->
 # ---------- FULL: archive all dialogs to Mongo (runs in background) ----------
 import asyncio
 from datetime import datetime, timezone
-from io import BytesIO
-from bson.objectid import ObjectId
-
 async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_hash, msg):
     """
-    Single Telegram message -> Mongo upsert.
+    Single Telegram message -> Mongo upsert (now with call detection).
     """
     MSG_COL = db.messages
 
+    # ---- detect call service message first ----
     media_type = "text"
     media_fs_id = None
     file_name = None
     mime_type = None
 
-    if getattr(msg, "media", None):
-        if getattr(msg, "photo", None): media_type = "image"
-        elif getattr(msg, "video", None): media_type = "video"
-        elif getattr(msg, "voice", None): media_type = "voice"
-        elif getattr(msg, "audio", None): media_type = "audio"
-        elif getattr(msg, "sticker", None): media_type = "sticker"
-        else: media_type = "file"
+    call_media_type, call_info = _call_meta_from_msg(msg)
+    if call_media_type:
+        media_type = call_media_type
+    else:
+        # ---- normal media classification ----
+        if getattr(msg, "media", None):
+            if getattr(msg, "photo", None): media_type = "image"
+            elif getattr(msg, "video", None): media_type = "video"
+            elif getattr(msg, "voice", None): media_type = "voice"
+            elif getattr(msg, "audio", None): media_type = "audio"
+            elif getattr(msg, "sticker", None): media_type = "sticker"
+            else: media_type = "file"
 
-        try:
-            blob = await msg.download_media(bytes)
-            mime_type, file_name = _guess_msg_media_meta(msg)
-            media_fs_id = _put_fs(db, blob, filename=file_name or "tg_import.bin", content_type=mime_type)
-        except Exception:
-            media_fs_id = None
+            # only download real media (call service message has no downloadable media)
+            try:
+                blob = await msg.download_media(bytes)
+                mime_type, file_name = _guess_msg_media_meta(msg)
+                media_fs_id = _put_fs(db, blob, filename=file_name or "tg_import.bin", content_type=mime_type)
+            except Exception:
+                media_fs_id = None
 
+    # ---- sender info (best-effort) ----
     sender_id = None
     sender_name = None
     try:
@@ -2834,6 +2861,7 @@ async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_h
     except Exception:
         pass
 
+    # ---- build doc ----
     doc = {
         "phone": phone,
         "chat_id": int(chat_id),
@@ -2851,9 +2879,19 @@ async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_h
         "file_name": file_name,
         "mime_type": mime_type,
         "status": "sent" if bool(getattr(msg, "out", False)) else "arrived",
-        "deleted_on_telegram": False
+        "deleted_on_telegram": False,
     }
 
+    # ---- enrich call meta if present ----
+    if call_media_type:
+        doc.update({
+            "call_status": call_info["status"],
+            "call_is_video": call_info["is_video"],
+            "call_duration": call_info["duration"],
+            "call_reason": call_info["raw_reason"],
+        })
+
+    # insert-if-absent (keep earlier copies intact)
     MSG_COL.update_one(
         {"phone": phone, "chat_id": int(chat_id), "msg_id": int(getattr(msg, "id", 0))},
         {"$setOnInsert": doc},
@@ -3315,12 +3353,55 @@ def qr_cleaner():
             print(f"⚠️ Cleaner error: {e}")
         time.sleep(300)
 
-threading.Thread(target=qr_cleaner, daemon=True).start()
+# threading.Thread(target=qr_cleaner, daemon=True).start()
 
 
 
 
 
+# --- CALL helpers (1:1 voice/video call service message) ---
+from telethon.tl.types import MessageService, MessageActionPhoneCall
+
+def _parse_call_action(action, is_out: bool):
+    """
+    MessageActionPhoneCall → normalized call meta
+    """
+    reason = type(getattr(action, 'reason', None)).__name__ if getattr(action, 'reason', None) else None
+    dur = getattr(action, 'duration', None)
+    is_video = bool(getattr(action, 'video', False))
+
+    if reason == 'PhoneCallDiscardReasonMissed':
+        status = 'missed'
+    elif reason == 'PhoneCallDiscardReasonBusy':
+        status = 'busy'
+    elif reason == 'PhoneCallDiscardReasonHangup':
+        status = 'canceled'
+    elif reason == 'PhoneCallDiscardReasonDisconnect':
+        status = 'ended'
+    elif dur:
+        status = 'ended'
+    else:
+        status = 'unknown'
+
+    return {
+        "status": status,
+        "direction": "outgoing" if is_out else "incoming",
+        "duration": dur,
+        "is_video": is_video,
+        "raw_reason": reason,
+    }
+
+def _call_meta_from_msg(msg):
+    """
+    Telethon Message → (media_type, call_info) or (None, None)
+    media_type: 'call_audio' | 'call_video'
+    """
+    action = getattr(msg, "action", None)
+    if isinstance(msg, MessageService) and isinstance(action, MessageActionPhoneCall):
+        info = _parse_call_action(action, bool(getattr(msg, "out", False)))
+        media_type = "call_video" if info["is_video"] else "call_audio"
+        return media_type, info
+    return None, None
 
 
 
@@ -3355,6 +3436,19 @@ def run_loop_forever():
     loop.run_forever()
 
 threading.Thread(target=run_loop_forever, daemon=True).start()
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
