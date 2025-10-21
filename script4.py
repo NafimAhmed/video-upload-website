@@ -1,7 +1,9 @@
 
 import os
 import asyncio
-from flask import Flask, request, jsonify, redirect, send_file
+from urllib.parse import urlencode, urljoin
+
+from flask import Flask, request, jsonify, redirect, send_file, has_request_context
 from flask_sock import Sock
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -2295,14 +2297,81 @@ def get_messages():
 
 
 # ---------- FULL: /message_media with FS-first, Telegram fallback ----------
+# @app.route("/message_media")
+# def message_media():
+#     """
+#     Serves media from Mongo GridFS if available; otherwise download from Telegram,
+#     save to GridFS, update doc, and serve. API inputs unchanged.
+#     """
+#     from telethon import types
+#     from flask import send_file
+#     from io import BytesIO
+#
+#     phone = request.args.get("phone")
+#     chat_id = request.args.get("chat_id")
+#     access_hash = request.args.get("access_hash")
+#     msg_id = request.args.get("msg_id")
+#
+#     if not all([phone, chat_id, access_hash, msg_id]):
+#         return "Bad Request", 400
+#
+#     chat_id = int(chat_id)
+#     access_hash = int(access_hash)
+#     msg_id = int(msg_id)
+#
+#     MSG_COL = db.messages
+#     fs = GridFS(db, collection="fs")
+#
+#     # 1) Try Mongo/FS first
+#     doc = MSG_COL.find_one({"phone": phone, "chat_id": chat_id, "msg_id": msg_id})
+#     if doc and doc.get("media_fs_id"):
+#         try:
+#             gf = fs.get(ObjectId(doc["media_fs_id"]))
+#             return send_file(BytesIO(gf.read()),
+#                              mimetype=(gf.content_type or "application/octet-stream"))
+#         except Exception:
+#             pass  # fallback
+#
+#     # 2) Telegram fallback → store to FS → update doc
+#     import asyncio
+#     async def get_media():
+#         tg_client = await get_client(phone)
+#         await tg_client.connect()
+#         try:
+#             peer = types.InputPeerUser(chat_id, access_hash)
+#         except Exception:
+#             peer = types.InputPeerUser(chat_id, access_hash)
+#         msg = await tg_client.get_messages(peer, ids=msg_id)
+#         if not msg or not msg.media:
+#             await tg_client.disconnect()
+#             return None, None, None
+#         data = await msg.download_media(bytes)
+#         await tg_client.disconnect()
+#         return data, "file.bin", "application/octet-stream"
+#
+#     loop = asyncio.new_event_loop()
+#     asyncio.set_event_loop(loop)
+#     data, fname, ctype = loop.run_until_complete(get_media())
+#     if not data:
+#         return "No media", 404
+#
+#     fs_id = _put_fs(db, data, filename=fname, content_type=ctype)
+#     MSG_COL.update_one(
+#         {"phone": phone, "chat_id": chat_id, "msg_id": msg_id},
+#         {"$set": {"media_fs_id": fs_id}},
+#         upsert=True
+#     )
+#     return send_file(BytesIO(data), mimetype=ctype or "application/octet-stream")
+
+
 @app.route("/message_media")
 def message_media():
     """
     Serves media from Mongo GridFS if available; otherwise download from Telegram,
-    save to GridFS, update doc, and serve. API inputs unchanged.
+    save to GridFS with correct content_type, update doc, and serve inline.
     """
     from telethon import types
-    from flask import send_file
+    from flask import send_file, make_response
     from io import BytesIO
 
     phone = request.args.get("phone")
@@ -2310,58 +2379,94 @@ def message_media():
     access_hash = request.args.get("access_hash")
     msg_id = request.args.get("msg_id")
 
-    if not all([phone, chat_id, access_hash, msg_id]):
+    if not all([phone, chat_id, msg_id]):
         return "Bad Request", 400
 
     chat_id = int(chat_id)
-    access_hash = int(access_hash)
     msg_id = int(msg_id)
+    access_hash = int(access_hash) if access_hash not in (None, "",) else None
 
     MSG_COL = db.messages
     fs = GridFS(db, collection="fs")
 
-    # 1) Try Mongo/FS first
+    # 1) Try GridFS first
+    from bson.objectid import ObjectId
     doc = MSG_COL.find_one({"phone": phone, "chat_id": chat_id, "msg_id": msg_id})
     if doc and doc.get("media_fs_id"):
         try:
             gf = fs.get(ObjectId(doc["media_fs_id"]))
-            return send_file(BytesIO(gf.read()),
-                             mimetype=(gf.content_type or "application/octet-stream"))
+            data = gf.read()
+            resp = make_response(data)
+            # Correct MIME + inline
+            mime = getattr(gf, "content_type", None) or "application/octet-stream"
+            fname = getattr(gf, "filename", None) or "file.bin"
+            resp.headers["Content-Type"] = mime
+            resp.headers["Content-Disposition"] = f'inline; filename="{fname}"'
+            # optional CORS (Flutter web)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
         except Exception:
-            pass  # fallback
+            pass  # fallback to Telegram
 
-    # 2) Telegram fallback → store to FS → update doc
+    # 2) Fallback to Telegram → download → save to FS → update doc → return
     import asyncio
-    async def get_media():
+
+    async def fetch_from_telegram():
         tg_client = await get_client(phone)
         await tg_client.connect()
         try:
-            peer = types.InputPeerUser(chat_id, access_hash)
-        except Exception:
-            peer = types.InputPeerUser(chat_id, access_hash)
-        msg = await tg_client.get_messages(peer, ids=msg_id)
-        if not msg or not msg.media:
+            # resolve entity robustly
+            peer = None
+            if access_hash is not None:
+                try:
+                    peer = types.InputPeerUser(chat_id, access_hash)
+                except Exception:
+                    try:
+                        peer = types.InputPeerChannel(chat_id, access_hash)
+                    except Exception:
+                        peer = types.InputPeerChat(chat_id)
+            if peer is None:
+                try:
+                    peer = await tg_client.get_entity(int(chat_id))
+                except Exception:
+                    peer = types.InputPeerChat(chat_id)
+
+            msg = await tg_client.get_messages(peer, ids=msg_id)
+            if not msg or not getattr(msg, "media", None):
+                await tg_client.disconnect()
+                return None, None, None
+
+            blob = await msg.download_media(bytes)
+            mime, fname = _guess_msg_media_meta(msg)
             await tg_client.disconnect()
+            return blob, mime, fname
+        except Exception:
+            try:
+                await tg_client.disconnect()
+            except:
+                pass
             return None, None, None
-        data = await msg.download_media(bytes)
-        await tg_client.disconnect()
-        return data, "file.bin", "application/octet-stream"
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    data, fname, ctype = loop.run_until_complete(get_media())
+    data, mime, fname = loop.run_until_complete(fetch_from_telegram())
     if not data:
         return "No media", 404
 
-    fs_id = _put_fs(db, data, filename=fname, content_type=ctype)
+    # Save to FS with correct content_type
+    fs_id = _put_fs(db, data, filename=fname, content_type=mime)
     MSG_COL.update_one(
         {"phone": phone, "chat_id": chat_id, "msg_id": msg_id},
         {"$set": {"media_fs_id": fs_id}},
         upsert=True
     )
-    return send_file(BytesIO(data), mimetype=ctype or "application/octet-stream")
 
-
+    # Return inline
+    resp = make_response(data)
+    resp.headers["Content-Type"] = mime or "application/octet-stream"
+    resp.headers["Content-Disposition"] = f'inline; filename="{fname or "file.bin"}"'
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 
@@ -2382,6 +2487,8 @@ async def archive_incoming_event(db, phone: str, chat_id: int, access_hash: int 
 
     media_type = "text"
     media_fs_id = None
+    file_name = None
+    mime_type = None
 
     if getattr(msg, "media", None):
         if getattr(msg, "photo", None): media_type = "image"
@@ -2393,7 +2500,8 @@ async def archive_incoming_event(db, phone: str, chat_id: int, access_hash: int 
 
         try:
             blob = await msg.download_media(bytes)
-            media_fs_id = _put_fs(db, blob, filename="tg_in.bin")
+            mime_type, file_name = _guess_msg_media_meta(msg)
+            media_fs_id = _put_fs(db, blob, filename=file_name or "tg_in.bin", content_type=mime_type)
         except Exception:
             media_fs_id = None
 
@@ -2411,8 +2519,8 @@ async def archive_incoming_event(db, phone: str, chat_id: int, access_hash: int 
         "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
         "media_type": media_type,
         "media_fs_id": media_fs_id,
-        "file_name": None,
-        "mime_type": None,
+        "file_name": file_name,
+        "mime_type": mime_type,
         "status": "arrived",
         "deleted_on_telegram": False
     }
@@ -2423,6 +2531,16 @@ async def archive_incoming_event(db, phone: str, chat_id: int, access_hash: int 
         upsert=True
     )
     return MSG_COL.find_one({"phone": phone, "chat_id": int(chat_id), "msg_id": int(msg.id)})
+
+
+
+
+
+
+
+
+
+
 
 async def archive_outgoing_pre(db, phone: str, chat_id: int, access_hash: int | None,
                                text: str | None, reply_to_id: int | None,
@@ -2468,6 +2586,17 @@ async def archive_outgoing_pre(db, phone: str, chat_id: int, access_hash: int | 
     MSG_COL.insert_one(doc)
     return doc
 
+
+
+
+
+
+
+
+
+
+
+
 async def archive_outgoing_finalize(db, phone: str, chat_id: int, temp_id: str, msg_obj) -> dict:
     MSG_COL = db.messages
     upd = {
@@ -2509,18 +2638,136 @@ def _detect_media_type(mime_type: str, file_name: str = "") -> str:
         return "sticker"
     return "file"
 
+
+
+
+
+
+
+
+
+
+from gridfs import GridFS
 def _put_fs(db, bytes_or_bio, filename: str = None, content_type: str = None):
+    """
+    Save bytes to GridFS with a correct MIME type so that /message_media can return inline.
+    """
     fs = GridFS(db, collection="fs")
     data = bytes_or_bio.getvalue() if hasattr(bytes_or_bio, "getvalue") else bytes_or_bio
-    return fs.put(data, filename=filename or "file.bin", contentType=content_type or "application/octet-stream")
+    # IMPORTANT: use content_type= (not contentType)
+    return fs.put(
+        data,
+        filename=filename or "file.bin",
+        content_type=content_type or "application/octet-stream",
+        # keep a copy for older readers if you ever used contentType before:
+        contentType=content_type or "application/octet-stream"
+    )
+
+
+
+
+
+import mimetypes
+
+def _guess_msg_media_meta(msg):
+    """
+    Best-effort mime/filename guess from a Telethon Message.
+    """
+    # defaults
+    ctype = "application/octet-stream"
+    fname = f"file_{getattr(msg, 'id', 0)}.bin"
+
+    # photos
+    if getattr(msg, "photo", None):
+        return "image/jpeg", f"photo_{msg.id}.jpg"
+
+    # voice
+    if getattr(msg, "voice", None):
+        return "audio/ogg", f"voice_{msg.id}.ogg"
+
+    # video
+    if getattr(msg, "video", None):
+        # Telethon docs typically give video/mp4
+        return "video/mp4", f"video_{msg.id}.mp4"
+
+    # audio (music)
+    if getattr(msg, "audio", None):
+        # Often audio/mpeg
+        return "audio/mpeg", f"audio_{msg.id}.mp3"
+
+    # sticker (often webp)
+    if getattr(msg, "sticker", None):
+        return "image/webp", f"sticker_{msg.id}.webp"
+
+    # generic document mime
+    doc = getattr(msg, "document", None)
+    if doc and getattr(doc, "mime_type", None):
+        ctype = doc.mime_type
+        ext = mimetypes.guess_extension(ctype) or ".bin"
+        fname = f"doc_{msg.id}{ext}"
+        return ctype, fname
+
+    return ctype, fname
+
+
+
+
+
+
+
+
+
+
+# def _doc_to_api(phone: str, chat_id: int, access_hash: int | None, doc: dict) -> dict:
+#     media_type = doc.get("media_type") or "text"
+#     media_link = None
+#     if media_type != "text" and doc.get("msg_id") is not None:
+#         media_link = f"/message_media?phone={phone}&chat_id={chat_id}&msg_id={doc['msg_id']}&access_hash={access_hash}"
+#     return {
+#         "id": doc.get("msg_id") if doc.get("msg_id") is not None else doc.get("temp_id"),
+#         "text": doc.get("text") or "",
+#         "sender_id": doc.get("sender_id"),
+#         "sender_name": doc.get("sender_name") or "",
+#         "date": (doc.get("date").astimezone(timezone.utc).isoformat()
+#                  if isinstance(doc.get("date"), datetime) else doc.get("date")),
+#         "is_out": bool(doc.get("is_out", doc.get("direction") == "out")),
+#         "reply_to": doc.get("reply_to"),
+#         "media_type": media_type,
+#         "media_link": media_link
+#     }
+
+
+
+
+
+
+def _base_url():
+    # e.g. http://192.168.0.247:8080/
+    if has_request_context():
+        return request.url_root
+    # WS বা ব্যাকগ্রাউন্ড থ্রেডে থাকলে এখানে ফfallback
+    return os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8080/")
 
 def _doc_to_api(phone: str, chat_id: int, access_hash: int | None, doc: dict) -> dict:
+    from datetime import datetime, timezone
     media_type = doc.get("media_type") or "text"
+
+    # ---- absolute media_link বানাই ----
     media_link = None
     if media_type != "text" and doc.get("msg_id") is not None:
-        media_link = f"/message_media?phone={phone}&chat_id={chat_id}&msg_id={doc['msg_id']}&access_hash={access_hash}"
+        params = {
+            "phone": str(phone),
+            "chat_id": int(chat_id),
+            "msg_id": int(doc["msg_id"]),
+        }
+        if access_hash is not None:
+            params["access_hash"] = int(access_hash)
+
+        qs = urlencode(params, doseq=False, safe="")
+        media_link = urljoin(_base_url(), f"message_media?{qs}")
+
     return {
-        "id": doc.get("msg_id") if doc.get("msg_id") is not None else doc.get("temp_id"),
+        "id": (doc.get("msg_id") if doc.get("msg_id") is not None else doc.get("temp_id")),
         "text": doc.get("text") or "",
         "sender_id": doc.get("sender_id"),
         "sender_name": doc.get("sender_name") or "",
@@ -2553,13 +2800,14 @@ from bson.objectid import ObjectId
 async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_hash, msg):
     """
     Single Telegram message -> Mongo upsert.
-    Idempotent: existing msg_id থাকলে overwrite করবে না (setOnInsert).
     """
     MSG_COL = db.messages
 
-    # --- media detect + download (only if not already in DB) ---
     media_type = "text"
     media_fs_id = None
+    file_name = None
+    mime_type = None
+
     if getattr(msg, "media", None):
         if getattr(msg, "photo", None): media_type = "image"
         elif getattr(msg, "video", None): media_type = "video"
@@ -2570,11 +2818,11 @@ async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_h
 
         try:
             blob = await msg.download_media(bytes)
-            media_fs_id = _put_fs(db, blob, filename="tg_import.bin", content_type="application/octet-stream")
+            mime_type, file_name = _guess_msg_media_meta(msg)
+            media_fs_id = _put_fs(db, blob, filename=file_name or "tg_import.bin", content_type=mime_type)
         except Exception:
             media_fs_id = None
 
-    # --- sender info (best-effort) ---
     sender_id = None
     sender_name = None
     try:
@@ -2600,8 +2848,8 @@ async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_h
         "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
         "media_type": media_type,
         "media_fs_id": media_fs_id,
-        "file_name": None,
-        "mime_type": None,
+        "file_name": file_name,
+        "mime_type": mime_type,
         "status": "sent" if bool(getattr(msg, "out", False)) else "arrived",
         "deleted_on_telegram": False
     }
@@ -2611,6 +2859,18 @@ async def _upsert_message_from_msg(tg_client, phone: str, chat_id: int, access_h
         {"$setOnInsert": doc},
         upsert=True
     )
+
+
+
+
+
+
+
+
+
+
+
+
 
 async def archive_all_dialogs(phone: str, per_chat_limit: int = 200, dialog_limit: int = 50):
     """
