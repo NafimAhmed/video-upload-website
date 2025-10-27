@@ -2250,209 +2250,180 @@ async def _verify_deleted_for_chat(phone: str, chat_id: int, access_hash: int | 
 
 
 
-@app.route("/messages")
+@app.route("/messages", methods=["GET"])
 def get_messages():
     """
-    Mongo-first message feed + live existence verify:
-      Query:
-        phone=... (required)
-        chat_id=... (required, int)
-        access_hash=... (optional, int)
-        limit=50 (optional)
-        verify_deleted=1 (optional)  -> last 300 ids reconcile via get_messages()
-        only_deleted=1 (optional)    -> return only deleted ones from Mongo
-        hide_deleted=1 (optional)    -> exclude deleted ones from Mongo
-        patch_db=0/1 (optional)      -> default 1: write tombstone to DB after live-check
-    Response: newest-last (ascending by time)
+    Mongo-first message feed with deterministic ordering + optional live verify.
+
+    Query params:
+      - phone=...                (required)
+      - chat_id=...              (required, int)
+      - access_hash=...          (optional, int)  -> not mandatory here
+      - limit=50                 (optional, default 50, max 500)
+      - order=asc|desc           (optional, default asc)  -> we will return the OPPOSITE order
+      - verify_deleted=1         (optional)  -> live reconcile last 300 ids via Telethon; mark deleted_on_telegram=True
+      - only_deleted=1           (optional)  -> return only deleted ones from Mongo
+      - hide_deleted=1           (optional)  -> exclude deleted ones from Mongo
+      - patch_db=0|1             (optional, default 1)    -> write tombstones after live-check
+
+    Response:
+      {
+        "status":"ok",
+        "order_requested": "asc|desc",
+        "order_returned":  "desc|asc",     # opposite of requested
+        "count": N,
+        "verify_deleted": {...}            # when verify_deleted=1
+        "messages":[ ... ]                 # ordered per order_returned
+      }
     """
-    import asyncio
-    from telethon import types
+    from flask import request, jsonify
+    from datetime import datetime
+    import math
 
-    # ---------- parse params ----------
-    raw_phone = request.args.get("phone")
-    chat_id_raw = request.args.get("chat_id")
-    access_hash_raw = request.args.get("access_hash")
+    # ---------- parse & normalize ----------
+    q = request.args
+    phone = q.get("phone")
+    if not phone:
+        return jsonify({"status": "error", "detail": "phone is required"}), 400
+
     try:
-        limit = int(request.args.get("limit", 50))
-    except Exception:
+        chat_id = int(q.get("chat_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "detail": "chat_id (int) is required"}), 400
+
+    # caller's desired order; we will intentionally FLIP it
+    order = (q.get("order", "asc") or "asc").lower()
+    if order not in ("asc", "desc"):
+        order = "asc"
+    effective_order = "desc" if order == "asc" else "asc"   # ← flip
+    sort_dir = 1 if effective_order == "asc" else -1
+
+    # limits
+    try:
+        limit = int(q.get("limit", 50))
+    except ValueError:
         limit = 50
+    limit = max(1, min(limit, 500))
 
-    verify_deleted = request.args.get("verify_deleted") == "1"
-    only_deleted   = request.args.get("only_deleted") == "1"
-    hide_deleted   = request.args.get("hide_deleted") == "1"
-    patch_db       = (request.args.get("patch_db", "1") != "0")
+    only_deleted   = str(q.get("only_deleted", "0")).lower()   in ("1", "true", "yes")
+    hide_deleted   = str(q.get("hide_deleted", "0")).lower()   in ("1", "true", "yes")
+    verify_deleted = str(q.get("verify_deleted", "0")).lower() in ("1", "true", "yes")
+    patch_db       = str(q.get("patch_db", "1")).lower()       in ("1", "true", "yes")
 
-    if not raw_phone or not chat_id_raw:
-        return jsonify({"status": "error", "detail": "missing params"}), 400
-
-    # normalize
-    phone = raw_phone.strip().replace(" ", "")
-    try:
-        chat_id = int(chat_id_raw)
-    except Exception:
-        return jsonify({"status": "error", "detail": "chat_id must be int"}), 400
-
-    try:
-        access_hash_int = int(access_hash_raw) if access_hash_raw not in (None, "",) else None
-    except Exception:
-        access_hash_int = None
-
-    # ---------- helper: pull recent window from Telegram (lazy media) ----------
-    async def pull_once():
-        tg_client = await get_client(phone)
-        await tg_client.connect()
-        try:
-            if not await tg_client.is_user_authorized():
-                return  # not authorized → serve from Mongo
-
-            # resolve peer robustly
-            try:
-                if access_hash_int is not None:
-                    try:
-                        peer = types.InputPeerUser(int(chat_id), int(access_hash_int))
-                    except Exception:
-                        try:
-                            peer = types.InputPeerChannel(int(chat_id), int(access_hash_int))
-                        except Exception:
-                            peer = types.InputPeerChat(int(chat_id))
-                else:
-                    peer = await tg_client.get_entity(int(chat_id))
-            except Exception:
-                try:
-                    peer = types.InputPeerChat(int(chat_id))
-                except Exception:
-                    return
-
-            # pull small window and upsert (no media download)
-            PULL_LIMIT = 200
-            async for msg in tg_client.iter_messages(peer, limit=PULL_LIMIT):
-                await _upsert_message_from_msg(tg_client, phone, int(chat_id), access_hash_int, msg)
-        finally:
-            try:
-                await tg_client.disconnect()
-            except Exception:
-                pass
-
-    # ---------- helper: live probe which ids still exist on Telegram ----------
-    async def _probe_existing_ids(phone: str, chat_id: int, access_hash: int | None, ids: list[int]) -> set[int]:
-        """
-        Telegram-এ ওই chat-এর প্রদত্ত msg_id-গুলো এখনো আছে কিনা—সেট (existing_ids) রিটার্ন করে।
-        """
-        existing: set[int] = set()
-        if not ids:
-            return existing
-
-        client = await get_client(phone)
-        await client.connect()
-        try:
-            if not await client.is_user_authorized():
-                return existing
-
-            # robust peer resolve
-            try:
-                if access_hash is not None:
-                    try: peer = types.InputPeerUser(int(chat_id), int(access_hash))
-                    except:
-                        try: peer = types.InputPeerChannel(int(chat_id), int(access_hash))
-                        except: peer = types.InputPeerChat(int(chat_id))
-                else:
-                    peer = await client.get_entity(int(chat_id))
-            except Exception:
-                try: peer = types.InputPeerChat(int(chat_id))
-                except Exception: return existing
-
-            BATCH = 100
-            for i in range(0, len(ids), BATCH):
-                chunk = ids[i:i+BATCH]
-                res = await client.get_messages(peer, ids=chunk)
-                if not isinstance(res, list):
-                    res = [res]
-                for m in res:
-                    if m and getattr(m, "id", None) is not None:
-                        existing.add(int(m.id))
-            return existing
-        finally:
-            try: await client.disconnect()
-            except: pass
-
-    # ---------- run pull (+ optional verify_deleted) on a temp loop ----------
-    tmp_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(tmp_loop)
-    try:
-        tmp_loop.run_until_complete(pull_once())
-        if verify_deleted:
-            # helper already defined elsewhere in your file
-            tmp_loop.run_until_complete(
-                _verify_deleted_for_chat(phone, int(chat_id), access_hash_int, max_check=300)
-            )
-    finally:
-        try:
-            tmp_loop.close()
-        except Exception:
-            pass
-
-    # ---------- read from Mongo with filters ----------
-    MSG_COL = db.messages
-    filt = {"phone": phone, "chat_id": int(chat_id)}
+    # ---------- build Mongo filter ----------
+    match = {"phone": phone, "chat_id": chat_id}
     if only_deleted:
-        filt["deleted_on_telegram"] = True
+        match["deleted_on_telegram"] = True
     elif hide_deleted:
-        filt["deleted_on_telegram"] = {"$ne": True}
+        match["$or"] = [
+            {"deleted_on_telegram": {"$exists": False}},
+            {"deleted_on_telegram": False},
+        ]
 
-    latest_docs = list(
-        MSG_COL.find(filt)
-               .sort([("date", -1), ("msg_id", -1)])   # newest → oldest
-               .limit(limit)
-    )
-    latest_docs.reverse()  # oldest → newest
+    # ---------- query Mongo in the flipped order ----------
+    cursor = db.messages.find(match).sort([
+        ("msg_id", sort_dir),   # primary for deterministic paging
+        ("date",   sort_dir),   # secondary if msg_id missing
+        ("_id",    sort_dir),   # tie-breaker
+    ]).limit(limit)
 
-    # ---------- live verify the exact docs we will return ----------
-    # numeric msg_id only (temp/pending rows বাদ)
-    ids: list[int] = []
-    id_to_doc: dict[int, dict] = {}
-    for d in latest_docs:
-        mid = d.get("msg_id")
+    docs = list(cursor)
+
+    # ---------- optional live verify (last 300 ids) ----------
+    verify_info = None
+    if verify_deleted:
         try:
-            if mid is not None:
-                mid = int(mid)
-                ids.append(mid)
-                id_to_doc[mid] = d
-        except Exception:
-            continue
+            ids_to_check = [d.get("msg_id") for d in db.messages.find(
+                {"phone": phone, "chat_id": chat_id, "msg_id": {"$ne": None}},
+                {"msg_id": 1}
+            ).sort([("msg_id", -1)]).limit(300)]
+            ids_to_check = [i for i in ids_to_check if isinstance(i, int)]
 
-    existing_ids: set[int] = set()
-    if ids:
-        loop2 = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop2)
-        try:
-            existing_ids = loop2.run_until_complete(
-                _probe_existing_ids(phone, int(chat_id), access_hash_int, ids)
-            )
-        finally:
-            try: loop2.close()
-            except: pass
+            missing_ids = []
+            tg_client = None
+            try:
+                # ACTIVE_TG / ACTIVE_TG_LOCK expected in your global scope
+                with ACTIVE_TG_LOCK:
+                    tg_client = ACTIVE_TG.get(phone)
+            except NameError:
+                tg_client = None
 
-    missing_ids = [i for i in ids if i not in existing_ids]
-    if missing_ids:
-        # in-memory flag set → _doc_to_api ঠিক তথ্য দেবে
-        for mid in missing_ids:
-            try:
-                id_to_doc[mid]["deleted_on_telegram"] = True
-            except Exception:
-                pass
-        # optional DB patch (default on)
-        if patch_db:
-            try:
-                MSG_COL.update_many(
-                    {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": missing_ids}},
+            if tg_client and tg_client.is_connected() and getattr(tg_client, "loop", None) and tg_client.loop.is_running():
+                import asyncio
+                from telethon import types as TL
+
+                async def _check():
+                    # try resolving best-effort by chat_id (user/channel/chat)
+                    peer = None
+                    if chat_id > 0:
+                        for peer_try in (TL.PeerUser(chat_id), TL.PeerChannel(chat_id)):
+                            try:
+                                peer = await tg_client.get_entity(peer_try)
+                                if peer: break
+                            except Exception:
+                                pass
+                    else:
+                        for peer_try in (TL.PeerChannel(abs(chat_id)), TL.PeerChat(abs(chat_id))):
+                            try:
+                                peer = await tg_client.get_entity(peer_try)
+                                if peer: break
+                            except Exception:
+                                pass
+                    if not peer:
+                        return []
+
+                    missing = []
+                    batch = 100
+                    for i in range(0, len(ids_to_check), batch):
+                        part = ids_to_check[i:i+batch]
+                        res = await tg_client.get_messages(peer, ids=part)
+                        # Telethon returns None for deleted/missing ids at aligned positions
+                        for mid, msg in zip(part, res):
+                            if msg is None:
+                                missing.append(mid)
+                    return missing
+
+                fut = asyncio.run_coroutine_threadsafe(_check(), tg_client.loop)
+                missing_ids = fut.result(timeout=15)
+            else:
+                verify_info = "skipped (no active telegram client for this phone)"
+
+            if patch_db and missing_ids:
+                db.messages.update_many(
+                    {"phone": phone, "chat_id": chat_id, "msg_id": {"$in": missing_ids}},
                     {"$set": {"deleted_on_telegram": True}}
                 )
-            except Exception as e:
-                print("⚠️ patch_db update_many error:", e)
 
-    # ---------- build API objects (flags now accurate) ----------
-    msgs = [_doc_to_api(phone, int(chat_id), access_hash_int, d) for d in latest_docs]
-    return jsonify({"status": "ok", "messages": msgs})
+            if verify_info is None:
+                verify_info = {"checked": len(ids_to_check), "deleted_found": len(missing_ids)}
+        except Exception as e:
+            verify_info = f"verify error: {e.__class__.__name__}: {e}"
+
+    # ---------- transform for JSON ----------
+    def _to_json(doc):
+        d = dict(doc)
+        _id = d.pop("_id", None)
+        if _id is not None:
+            d["_id"] = str(_id)
+        dt = d.get("date")
+        if isinstance(dt, datetime):
+            d["date"] = dt.isoformat()
+        return d
+
+    out = [_to_json(d) for d in docs]
+
+    payload = {
+        "status": "ok",
+        "order_requested": order,
+        "order_returned": effective_order,
+        "count": len(out),
+        "messages": out
+    }
+    if verify_info is not None:
+        payload["verify_deleted"] = verify_info
+
+    return jsonify(payload)
+
 
 
 
