@@ -395,855 +395,7 @@ def _now_iso():
 
 
 
-# ======= FULL /chat_ws (drop-in replacement) =======
-# =========================
-# 🔌 WebSocket: /chat_ws
-# =========================
-# @sock.route("/chat_ws")
-# def chat_ws(ws):
-#     """
-#     INIT (first frame):
-#       {"phone":"<E.164>", "chat_id": <int>, "access_hash": <int|null>}
-#     Then commands:
-#       {"action":"send", "text":"hi"}  OR file_* keys
-#       {"action":"typing_start"} / {"action":"typing_stop"}
-#       {"action":"ping"} / {"action":"stop"}
-#
-#     Server emits:
-#       {"status":"listening", "chat_id":"..."}
-#       {"action":"seed", "messages":[...]}                # last 50 from Mongo (newest-last)
-#       {"action":"new_message", ...}                      # realtime
-#       {"action":"typing", ...} / {"action":"typing_stopped", ...}
-#       {"action":"send_queued", "temp_id": "...", ...}    # immediate ack
-#       {"action":"upload_progress", "temp_id":"...", "progress": 37.5}
-#       {"action":"send_done", "temp_id":"...", "msg_id": 123, ...}
-#       {"status":"error", "detail":"..."}
-#       {"action":"_hb", "t":"..."}                        # heartbeat
-#     """
-#     import json, threading, time, asyncio, os
-#     from queue import Queue, Empty
-#     from gridfs import GridFS
-#     from bson.objectid import ObjectId
-#     from io import BytesIO
-#     from datetime import datetime, timezone
-#
-#     from telethon import events, functions, types
-#     from telethon.tl.types import (
-#         UpdateUserTyping, UpdateChatUserTyping, UpdateChannelUserTyping,
-#         UpdateNewMessage, UpdateNewChannelMessage,
-#         MessageService, MessageActionPhoneCall,
-#         InputPeerUser, InputPeerChannel, InputPeerChat
-#     )
-#
-#     print("🔗 [chat_ws] connected")
-#
-#     # ---------- single writer (never call ws.send from multiple threads) ----------
-#     alive = True
-#     out_q: Queue = Queue(maxsize=1000)
-#
-#     def ws_send(obj):
-#         """enqueue JSON-able object safely"""
-#         if not alive:
-#             return
-#         try:
-#             out_q.put_nowait(obj)
-#         except Exception:
-#             # drop chatty events if congested
-#             if isinstance(obj, dict) and obj.get("action") in ("upload_progress", "typing", "_hb"):
-#                 return
-#             out_q.put(obj)
-#
-#     def writer():
-#         nonlocal alive
-#         while alive:
-#             try:
-#                 item = out_q.get(timeout=1)
-#             except Empty:
-#                 continue
-#             if item is None:
-#                 break
-#             try:
-#                 payload = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
-#                 ws.send(payload)
-#             except Exception as e:
-#                 alive = False
-#                 try:
-#                     print(f"⚠️ ws writer send failed: {e}")
-#                 except:
-#                     pass
-#                 break
-#
-#     threading.Thread(target=writer, daemon=True).start()
-#
-#     def safe_receive():
-#         try:
-#             return ws.receive()
-#         except Exception as e:
-#             if "closed" in str(e).lower():
-#                 return None
-#             raise
-#
-#     # ---------- heartbeats ----------
-#     HEARTBEAT_SEC = int(os.getenv("WS_HEARTBEAT_SEC", "25"))
-#     def heartbeat():
-#         while alive:
-#             time.sleep(HEARTBEAT_SEC)
-#             ws_send({"action": "_hb", "t": _now()})
-#     threading.Thread(target=heartbeat, daemon=True).start()
-#
-#     # ---------- typing TTL ----------
-#     typing_tracker = {}
-#     typing_lock = threading.Lock()
-#     TYPING_TTL = 6.0
-#     def typing_cleaner():
-#         while alive:
-#             time.sleep(2.0)
-#             now = time.time()
-#             expired = []
-#             with typing_lock:
-#                 for key, last in list(typing_tracker.items()):
-#                     if now - last > TYPING_TTL:
-#                         expired.append(key); typing_tracker.pop(key, None)
-#             for (cid, uid) in expired:
-#                 ws_send({"action": "typing_stopped", "chat_id": str(cid), "sender_id": uid, "date": _now()})
-#     threading.Thread(target=typing_cleaner, daemon=True).start()
-#
-#     # ---------- INIT (FIRST FRAME = registration!) ----------
-#     init_msg = safe_receive()
-#     if not init_msg:
-#         print("❌ [chat_ws] no init, closing")
-#         alive = False; out_q.put(None); return
-#
-#     try:
-#         init = json.loads(init_msg)
-#     except Exception:
-#         ws_send({"status": "error", "detail": "invalid init json"})
-#         alive = False; out_q.put(None); return
-#
-#     phone = (init.get("phone") or "").strip()
-#     chat_id_raw = init.get("chat_id")
-#     access_hash_raw = init.get("access_hash")
-#
-#     if not phone or chat_id_raw is None:
-#         ws_send({"status": "error", "detail": "phone/chat_id missing"})
-#         alive = False; out_q.put(None); return
-#
-#     try:
-#         chat_id = int(chat_id_raw)
-#     except Exception:
-#         ws_send({"status": "error", "detail": "chat_id must be int"})
-#         alive = False; out_q.put(None); return
-#
-#     try:
-#         access_hash = int(access_hash_raw) if access_hash_raw not in (None, "") else None
-#     except Exception:
-#         access_hash = None
-#
-#     # Ensure PUBLIC_BASE_URL for absolute media_link in WS context
-#     try:
-#         host = ws.environ.get("HTTP_HOST") or "127.0.0.1:8080"
-#         scheme = "https" if (ws.environ.get("wsgi.url_scheme") == "https" or
-#                              ws.environ.get("HTTP_X_FORWARDED_PROTO") == "https") else "http"
-#         os.environ.setdefault("PUBLIC_BASE_URL", f"{scheme}://{host}/")
-#     except Exception:
-#         pass
-#
-#     # ---------- Mongo bits ----------
-#     MSG_COL = db.messages
-#     try:
-#         # Partial-unique: only enforce when msg_id is a NUMBER → avoids E11000 on null
-#         MSG_COL.create_index(
-#             [("phone", 1), ("chat_id", 1), ("msg_id", 1)],
-#             name="uniq_msg",
-#             unique=True,
-#             partialFilterExpression={"msg_id": {"$type": "number"}}
-#         )
-#     except Exception:
-#         pass
-#     fs = GridFS(db, collection="fs")
-#
-#     # ---------- Telethon listener (start NOW, on global loop) ----------
-#     tg_client = None
-#
-#     async def resolve_entity():
-#         """best-effort InputPeer from chat_id/access_hash"""
-#         try:
-#             if access_hash:
-#                 try: return InputPeerUser(int(chat_id), int(access_hash))
-#                 except:
-#                     try: return InputPeerChannel(int(chat_id), int(access_hash))
-#                     except: return InputPeerChat(int(chat_id))
-#             else:
-#                 return await tg_client.get_entity(int(chat_id))
-#         except:
-#             return InputPeerChat(int(chat_id))
-#
-#     async def run_listener():
-#         nonlocal tg_client
-#         tg_client = await get_client(phone)
-#         await tg_client.connect()
-#         if not await tg_client.is_user_authorized():
-#             ws_send({"status": "error", "detail": "not authorized"})
-#             await tg_client.disconnect()
-#             return
-#
-#         ws_send({"status": "listening", "chat_id": str(chat_id)})
-#
-#         # 1) seed last 50 from Mongo (newest last)
-#         try:
-#             seed_docs = list(
-#                 MSG_COL.find({"phone": phone, "chat_id": int(chat_id)})
-#                        .sort([("date", -1), ("msg_id", -1)]).limit(50)
-#             )
-#             seed_docs.reverse()
-#             if seed_docs:
-#                 ws_send({"action": "seed",
-#                          "messages": [_doc_to_api(phone, int(chat_id), access_hash, d) for d in seed_docs]})
-#         except Exception as se:
-#             print("⚠️ seed history error:", se)
-#
-#         # 2) ultra-fast realtime emit (no media download) + lazy archive to Mongo
-#         @tg_client.on(events.NewMessage(chats=int(chat_id)))
-#         async def on_new_msg(event):
-#             try:
-#                 quick = _event_to_api_quick(phone, int(chat_id), access_hash, event)
-#                 ws_send({"action": "new_message", **quick})
-#
-#                 async def _bg():
-#                     try:
-#                         await archive_incoming_event(db, phone, int(chat_id), access_hash, event)
-#                     except Exception as e:
-#                         print("⚠️ bg archive error:", e)
-#                 asyncio.create_task(_bg())
-#             except Exception as e:
-#                 print(f"⚠️ new_message emit error: {e}")
-#
-#         # 3) typing indicators (with TTL)
-#         @tg_client.on(events.Raw)
-#         async def on_typing_raw(update):
-#             try:
-#                 upd_chat_id, user_id = None, None
-#                 if isinstance(update, UpdateUserTyping):
-#                     upd_chat_id = int(update.user_id); user_id = int(update.user_id)
-#                 elif isinstance(update, UpdateChatUserTyping):
-#                     upd_chat_id = int(update.chat_id); user_id = int(update.user_id)
-#                 elif isinstance(update, UpdateChannelUserTyping):
-#                     upd_chat_id = int(update.channel_id); user_id = int(update.user_id)
-#                 if upd_chat_id and int(upd_chat_id) == int(chat_id):
-#                     with typing_lock:
-#                         typing_tracker[(upd_chat_id, user_id)] = time.time()
-#                     ws_send({"action": "typing", "chat_id": str(upd_chat_id),
-#                              "sender_id": user_id, "typing": True, "date": _now()})
-#             except Exception as e:
-#                 print(f"⚠️ typing event error: {e}")
-#
-#         # 4) call service messages → persist + emit normalized
-#         @tg_client.on(events.Raw)
-#         async def on_raw_calllog(update):
-#             try:
-#                 if isinstance(update, (UpdateNewMessage, UpdateNewChannelMessage)):
-#                     msg = update.message
-#                     pid = _peer_id(getattr(msg, 'peer_id', None))
-#                     if pid is None or int(pid) != int(chat_id):
-#                         return
-#                     if isinstance(msg, MessageService) and isinstance(msg.action, MessageActionPhoneCall):
-#                         await _upsert_message_from_msg(tg_client, phone, int(chat_id), access_hash, msg)
-#                         saved = MSG_COL.find_one({"phone": phone, "chat_id": int(chat_id),
-#                                                   "msg_id": int(getattr(msg, "id", 0))})
-#                         if saved:
-#                             ws_send({"action": "new_message",
-#                                      **_doc_to_api(phone, int(chat_id), access_hash, saved)})
-#             except Exception as e:
-#                 print(f"⚠️ raw calllog error: {e}")
-#
-#         await tg_client.run_until_disconnected()
-#
-#     # schedule on your global loop (already created at bottom of file)
-#     asyncio.run_coroutine_threadsafe(run_listener(), loop)
-#
-#     # ---------- upload progress throttle ----------
-#     progress_last = 0.0
-#     def progress_emit(temp_id: str, pct: float):
-#         nonlocal progress_last
-#         now = time.time()
-#         if now - progress_last < 0.15:  # ~6–7 fps
-#             return
-#         progress_last = now
-#         ws_send({"action": "upload_progress", "temp_id": temp_id, "progress": pct})
-#
-#     # ---------- WS receive loop (commands) ----------
-#     try:
-#         while alive:
-#             rec = safe_receive()
-#             if rec is None:
-#                 break
-#             try:
-#                 data = json.loads(rec)
-#             except Exception:
-#                 ws_send({"status": "error", "detail": "invalid json"})
-#                 continue
-#
-#             act = data.get("action")
-#
-#             if act == "stop":
-#                 break
-#
-#             elif act == "ping":
-#                 ws_send({"status": "pong"})
-#
-#             elif act in ("typing_start", "typing_stop"):
-#                 async def do_typing(act_=act):
-#                     try:
-#                         if not tg_client: return
-#                         peer = await resolve_entity()
-#                         req = (types.SendMessageTypingAction() if act_ == "typing_start"
-#                                else types.SendMessageCancelAction())
-#                         await tg_client(functions.messages.SetTypingRequest(peer=peer, action=req))
-#                         ws_send({"status": f"{act_}_ok"})
-#                     except Exception as e:
-#                         ws_send({"status": "error", "detail": str(e)})
-#                 asyncio.run_coroutine_threadsafe(do_typing(), loop)
-#
-#             elif act == "send":
-#                 text = data.get("text")
-#                 file_b64 = data.get("file_base64")
-#                 file_name = data.get("file_name", "file.bin")
-#                 mime_type = data.get("mime_type", "")
-#                 reply_to_raw = data.get("reply_to") or data.get("reply_to_msg_id")
-#                 try:
-#                     reply_to_id = int(reply_to_raw) if reply_to_raw else None
-#                 except:
-#                     reply_to_id = None
-#
-#                 async def do_send():
-#                     pre = None
-#                     try:
-#                         if not tg_client or not await tg_client.is_user_authorized():
-#                             ws_send({"status": "error", "detail": "not authorized"})
-#                             return
-#
-#                         # 1) DB-তে pending insert + immediate ack
-#                         pre = await archive_outgoing_pre(
-#                             db=db, phone=phone, chat_id=int(chat_id), access_hash=access_hash,
-#                             text=text, reply_to_id=reply_to_id,
-#                             file_b64=file_b64, file_name=file_name, mime_type=mime_type
-#                         )
-#                         ws_send({
-#                             "action": "send_queued",
-#                             "temp_id": pre["temp_id"],
-#                             "text": text or "",
-#                             "media_type": pre["media_type"],
-#                             "date": pre["date"].astimezone(timezone.utc).isoformat()
-#                         })
-#
-#                         # 2) আসলেই Telegram-এ পাঠাও
-#                         peer = await resolve_entity()
-#                         msg_obj = None
-#
-#                         def cb(sent, total):
-#                             pct = round((sent / max(1, total)) * 100.0, 1)
-#                             progress_emit(pre["temp_id"], pct)
-#
-#                         if pre["media_type"] == "text":
-#                             msg_obj = await tg_client.send_message(peer, text or "", reply_to=reply_to_id)
-#                         else:
-#                             # bytes GridFS থেকে তুলে নাও (archive_outgoing_pre সেভ করেছিল)
-#                             blob = None
-#                             if pre.get("media_fs_id"):
-#                                 try: blob = fs.get(ObjectId(pre["media_fs_id"])).read()
-#                                 except Exception: blob = None
-#                             bio = BytesIO(blob) if blob else None
-#                             if bio: bio.name = file_name
-#
-#                             mt = pre["media_type"]
-#                             if mt == "voice":
-#                                 msg_obj = await tg_client.send_file(
-#                                     peer, bio, caption=text or "", voice_note=True,
-#                                     reply_to=reply_to_id, progress_callback=cb
-#                                 )
-#                             elif mt == "video":
-#                                 msg_obj = await tg_client.send_file(
-#                                     peer, bio, caption=text or "", supports_streaming=True,
-#                                     reply_to=reply_to_id, progress_callback=cb
-#                                 )
-#                             else:
-#                                 msg_obj = await tg_client.send_file(
-#                                     peer, bio, caption=text or "", reply_to=reply_to_id,
-#                                     progress_callback=cb
-#                                 )
-#
-#                         # 3) DB finalize + final ack
-#                         await archive_outgoing_finalize(db, phone, int(chat_id), pre["temp_id"], msg_obj)
-#                         ws_send({
-#                             "action": "send_done",
-#                             "temp_id": pre["temp_id"],
-#                             "msg_id": int(getattr(msg_obj, "id", 0)),
-#                             "date": getattr(msg_obj, "date", datetime.now(timezone.utc)).isoformat()
-#                         })
-#                         # Note: echo new_message আসবেই NewMessage handler দিয়ে
-#
-#                     except Exception as e:
-#                         err = {"status": "error", "detail": str(e)}
-#                         if pre:
-#                             err.update({"action": "send_failed", "temp_id": pre["temp_id"]})
-#                         ws_send(err)
-#
-#                 asyncio.run_coroutine_threadsafe(do_send(), loop)
-#
-#             else:
-#                 ws_send({"status": "error", "detail": "unknown action"})
-#
-#     except Exception as e:
-#         if "closed" in str(e).lower():
-#             print(f"ℹ️ [chat_ws] client closed: {e}")
-#         else:
-#             print(f"⚠️ [chat_ws] Exception: {e}")
-#     finally:
-#         # shutdown
-#         alive = False
-#         out_q.put(None)
-#         try:
-#             if tg_client:
-#                 asyncio.run_coroutine_threadsafe(tg_client.disconnect(), loop).result(timeout=5)
-#         except Exception:
-#             pass
-#         print("❌ [chat_ws] disconnected")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ======= /chat_ws (no sleeping loops) =======
-# @sock.route("/chat_ws")
-# def chat_ws(ws):
-#     """
-#     INIT (first frame):
-#       {"phone":"<E.164>", "chat_id": <int>, "access_hash": <int|null>}
-#     Then commands:
-#       {"action":"send", "text":"hi"}  OR file_* keys
-#       {"action":"typing_start"} / {"action":"typing_stop"}
-#       {"action":"ping"} / {"action":"stop"}
-#
-#     Server emits:
-#       {"status":"listening", "chat_id":"..."}
-#       {"action":"seed", "messages":[...]}                # last 50 from Mongo (newest-last)
-#       {"action":"new_message", ...}                      # realtime
-#       {"action":"typing", ...} / {"action":"typing_stopped", ...}
-#       {"action":"send_queued", "temp_id": "...", ...}    # immediate ack
-#       {"action":"upload_progress", "temp_id":"...", "progress": 37.5}
-#       {"action":"send_done", "temp_id":"...", "msg_id": 123, ...}
-#       {"status":"error", "detail":"..."}
-#     """
-#     import json, threading, asyncio, os, time
-#     from queue import Queue, Empty
-#     from gridfs import GridFS
-#     from bson.objectid import ObjectId
-#     from io import BytesIO
-#     from datetime import datetime, timezone
-#     from threading import Timer
-#
-#     from telethon import events, functions, types
-#     from telethon.tl.types import (
-#         UpdateUserTyping, UpdateChatUserTyping, UpdateChannelUserTyping,
-#         UpdateNewMessage, UpdateNewChannelMessage,
-#         MessageService, MessageActionPhoneCall,
-#         InputPeerUser, InputPeerChannel, InputPeerChat
-#     )
-#
-#     print("🔗 [chat_ws] connected")
-#
-#     # ---------- single writer (never call ws.send from multiple threads) ----------
-#     alive = True
-#     out_q: Queue = Queue(maxsize=1000)
-#
-#     def ws_send(obj):
-#         if not alive:
-#             return
-#         try:
-#             out_q.put_nowait(obj)
-#         except Exception:
-#             # drop noisy events if congested
-#             if isinstance(obj, dict) and obj.get("action") in ("upload_progress", "typing"):
-#                 return
-#             out_q.put(obj)
-#
-#     def writer():
-#         nonlocal alive
-#         while alive:
-#             try:
-#                 item = out_q.get(timeout=1)
-#             except Empty:
-#                 continue
-#             if item is None:
-#                 break
-#             try:
-#                 payload = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
-#                 ws.send(payload)
-#             except Exception as e:
-#                 alive = False
-#                 try: print(f"⚠️ ws writer send failed: {e}")
-#                 except: pass
-#                 break
-#
-#     threading.Thread(target=writer, daemon=True).start()
-#
-#     def safe_receive():
-#         try:
-#             return ws.receive()
-#         except Exception as e:
-#             if "closed" in str(e).lower():
-#                 return None
-#             raise
-#
-#     # ---------- INIT (FIRST FRAME = registration) ----------
-#     init_msg = safe_receive()
-#     if not init_msg:
-#         print("❌ [chat_ws] no init, closing")
-#         alive = False; out_q.put(None); return
-#
-#     try:
-#         init = json.loads(init_msg)
-#     except Exception:
-#         ws_send({"status": "error", "detail": "invalid init json"})
-#         alive = False; out_q.put(None); return
-#
-#     phone = (init.get("phone") or "").strip()
-#     chat_id_raw = init.get("chat_id")
-#     access_hash_raw = init.get("access_hash")
-#
-#     if not phone or chat_id_raw is None:
-#         ws_send({"status": "error", "detail": "phone/chat_id missing"})
-#         alive = False; out_q.put(None); return
-#
-#     try:
-#         chat_id = int(chat_id_raw)
-#     except Exception:
-#         ws_send({"status": "error", "detail": "chat_id must be int"})
-#         alive = False; out_q.put(None); return
-#
-#     try:
-#         access_hash = int(access_hash_raw) if access_hash_raw not in (None, "") else None
-#     except Exception:
-#         access_hash = None
-#
-#     # Ensure PUBLIC_BASE_URL for absolute media_link in WS context
-#     try:
-#         host = ws.environ.get("HTTP_HOST") or "127.0.0.1:8080"
-#         scheme = "https" if (ws.environ.get("wsgi.url_scheme") == "https" or
-#                              ws.environ.get("HTTP_X_FORWARDED_PROTO") == "https") else "http"
-#         os.environ.setdefault("PUBLIC_BASE_URL", f"{scheme}://{host}/")
-#     except Exception:
-#         pass
-#
-#     # ---------- Mongo bits ----------
-#     MSG_COL = db.messages
-#     try:
-#         MSG_COL.create_index(
-#             [("phone", 1), ("chat_id", 1), ("msg_id", 1)],
-#             name="uniq_msg",
-#             unique=True,
-#             partialFilterExpression={"msg_id": {"$type": "number"}}
-#         )
-#     except Exception:
-#         pass
-#     fs = GridFS(db, collection="fs")
-#
-#     # ---------- Telethon listener (global loop) ----------
-#     tg_client = None
-#
-#     async def resolve_entity():
-#         try:
-#             if access_hash:
-#                 try: return InputPeerUser(int(chat_id), int(access_hash))
-#                 except:
-#                     try: return InputPeerChannel(int(chat_id), int(access_hash))
-#                     except: return InputPeerChat(int(chat_id))
-#             else:
-#                 return await tg_client.get_entity(int(chat_id))
-#         except:
-#             return InputPeerChat(int(chat_id))
-#
-#     # --- typing TTL via one-shot timers (NO sleep loop) ---
-#     TYPING_TTL = 6.0
-#     typing_timers: dict[tuple[int,int], Timer] = {}
-#
-#     def schedule_typing_stop(cid: int, uid: int):
-#         key = (cid, uid)
-#         old = typing_timers.pop(key, None)
-#         if old:
-#             try: old.cancel()
-#             except: pass
-#
-#         def fire():
-#             # may fire after close; guard with alive
-#             if not alive: return
-#             ws_send({"action": "typing_stopped", "chat_id": str(cid), "sender_id": uid, "date": _now()})
-#             typing_timers.pop(key, None)
-#
-#         t = Timer(TYPING_TTL, fire)
-#         t.daemon = True
-#         typing_timers[key] = t
-#         t.start()
-#
-#     async def run_listener():
-#         nonlocal tg_client
-#         tg_client = await get_client(phone)
-#         await tg_client.connect()
-#         if not await tg_client.is_user_authorized():
-#             ws_send({"status": "error", "detail": "not authorized"})
-#             await tg_client.disconnect()
-#             return
-#
-#         ws_send({"status": "listening", "chat_id": str(chat_id)})
-#
-#         # 1) seed last 50 from Mongo (newest last)
-#         try:
-#             seed_docs = list(
-#                 MSG_COL.find({"phone": phone, "chat_id": int(chat_id)})
-#                        .sort([("date", -1), ("msg_id", -1)]).limit(50)
-#             )
-#             seed_docs.reverse()
-#             if seed_docs:
-#                 ws_send({"action": "seed",
-#                          "messages": [_doc_to_api(phone, int(chat_id), access_hash, d) for d in seed_docs]})
-#         except Exception as se:
-#             print("⚠️ seed history error:", se)
-#
-#         # 2) realtime emit + lazy archive
-#         @tg_client.on(events.NewMessage(chats=int(chat_id)))
-#         async def on_new_msg(event):
-#             try:
-#                 quick = _event_to_api_quick(phone, int(chat_id), access_hash, event)
-#                 ws_send({"action": "new_message", **quick})
-#                 async def _bg():
-#                     try:
-#                         await archive_incoming_event(db, phone, int(chat_id), access_hash, event)
-#                     except Exception as e:
-#                         print("⚠️ bg archive error:", e)
-#                 asyncio.create_task(_bg())
-#             except Exception as e:
-#                 print(f"⚠️ new_message emit error: {e}")
-#
-#         # 3) typing indicators (no cleaner; timers handle stop)
-#         @tg_client.on(events.Raw)
-#         async def on_typing_raw(update):
-#             try:
-#                 upd_chat_id, user_id = None, None
-#                 if isinstance(update, UpdateUserTyping):
-#                     upd_chat_id = int(update.user_id); user_id = int(update.user_id)
-#                 elif isinstance(update, UpdateChatUserTyping):
-#                     upd_chat_id = int(update.chat_id); user_id = int(update.user_id)
-#                 elif isinstance(update, UpdateChannelUserTyping):
-#                     upd_chat_id = int(update.channel_id); user_id = int(update.user_id)
-#                 if upd_chat_id and int(upd_chat_id) == int(chat_id):
-#                     ws_send({"action": "typing", "chat_id": str(upd_chat_id),
-#                              "sender_id": user_id, "typing": True, "date": _now()})
-#                     schedule_typing_stop(upd_chat_id, user_id)
-#             except Exception as e:
-#                 print(f"⚠️ typing event error: {e}")
-#
-#         # 4) call service messages → persist + emit normalized
-#         @tg_client.on(events.Raw)
-#         async def on_raw_calllog(update):
-#             try:
-#                 if isinstance(update, (UpdateNewMessage, UpdateNewChannelMessage)):
-#                     msg = update.message
-#                     pid = _peer_id(getattr(msg, 'peer_id', None))
-#                     if pid is None or int(pid) != int(chat_id):
-#                         return
-#                     if isinstance(msg, MessageService) and isinstance(msg.action, MessageActionPhoneCall):
-#                         await _upsert_message_from_msg(tg_client, phone, int(chat_id), access_hash, msg)
-#                         saved = MSG_COL.find_one({"phone": phone, "chat_id": int(chat_id),
-#                                                   "msg_id": int(getattr(msg, "id", 0))})
-#                         if saved:
-#                             ws_send({"action": "new_message",
-#                                      **_doc_to_api(phone, int(chat_id), access_hash, saved)})
-#             except Exception as e:
-#                 print(f"⚠️ raw calllog error: {e}")
-#
-#         await tg_client.run_until_disconnected()
-#
-#     # schedule on your global loop
-#     asyncio.run_coroutine_threadsafe(run_listener(), loop)
-#
-#     # ---------- upload progress throttle (no sleep, just throttle by time) ----------
-#     progress_last = 0.0
-#     def progress_emit(temp_id: str, pct: float):
-#         nonlocal progress_last
-#         now = time.time()
-#         if now - progress_last < 0.15:
-#             return
-#         progress_last = now
-#         ws_send({"action": "upload_progress", "temp_id": temp_id, "progress": pct})
-#
-#     # ---------- WS receive loop (commands) ----------
-#     try:
-#         while alive:
-#             rec = safe_receive()
-#             if rec is None:
-#                 break
-#             try:
-#                 data = json.loads(rec)
-#             except Exception:
-#                 ws_send({"status": "error", "detail": "invalid json"})
-#                 continue
-#
-#             act = data.get("action")
-#
-#             if act == "stop":
-#                 break
-#
-#             elif act == "ping":
-#                 ws_send({"status": "pong"})
-#
-#             elif act in ("typing_start", "typing_stop"):
-#                 async def do_typing(act_=act):
-#                     try:
-#                         if not tg_client: return
-#                         peer = await resolve_entity()
-#                         req = (types.SendMessageTypingAction() if act_ == "typing_start"
-#                                else types.SendMessageCancelAction())
-#                         await tg_client(functions.messages.SetTypingRequest(peer=peer, action=req))
-#                         ws_send({"status": f"{act_}_ok"})
-#                     except Exception as e:
-#                         ws_send({"status": "error", "detail": str(e)})
-#                 asyncio.run_coroutine_threadsafe(do_typing(), loop)
-#
-#             elif act == "send":
-#                 text = data.get("text")
-#                 file_b64 = data.get("file_base64")
-#                 file_name = data.get("file_name", "file.bin")
-#                 mime_type = data.get("mime_type", "")
-#                 reply_to_raw = data.get("reply_to") or data.get("reply_to_msg_id")
-#                 try:
-#                     reply_to_id = int(reply_to_raw) if reply_to_raw else None
-#                 except:
-#                     reply_to_id = None
-#
-#                 async def do_send():
-#                     pre = None
-#                     try:
-#                         if not tg_client or not await tg_client.is_user_authorized():
-#                             ws_send({"status": "error", "detail": "not authorized"})
-#                             return
-#
-#                         # 1) DB pending insert + immediate ack
-#                         pre = await archive_outgoing_pre(
-#                             db=db, phone=phone, chat_id=int(chat_id), access_hash=access_hash,
-#                             text=text, reply_to_id=reply_to_id,
-#                             file_b64=file_b64, file_name=file_name, mime_type=mime_type
-#                         )
-#                         ws_send({
-#                             "action": "send_queued",
-#                             "temp_id": pre["temp_id"],
-#                             "text": text or "",
-#                             "media_type": pre["media_type"],
-#                             "date": pre["date"].astimezone(timezone.utc).isoformat()
-#                         })
-#
-#                         # 2) send to Telegram
-#                         peer = await resolve_entity()
-#                         msg_obj = None
-#
-#                         def cb(sent, total):
-#                             pct = round((sent / max(1, total)) * 100.0, 1)
-#                             progress_emit(pre["temp_id"], pct)
-#
-#                         if pre["media_type"] == "text":
-#                             msg_obj = await tg_client.send_message(peer, text or "", reply_to=reply_to_id)
-#                         else:
-#                             blob = None
-#                             if pre.get("media_fs_id"):
-#                                 try:
-#                                     blob = fs.get(ObjectId(pre["media_fs_id"])).read()
-#                                 except Exception:
-#                                     blob = None
-#                             bio = BytesIO(blob) if blob else None
-#                             if bio: bio.name = file_name
-#
-#                             mt = pre["media_type"]
-#                             if mt == "voice":
-#                                 msg_obj = await tg_client.send_file(
-#                                     peer, bio, caption=text or "", voice_note=True,
-#                                     reply_to=reply_to_id, progress_callback=cb
-#                                 )
-#                             elif mt == "video":
-#                                 msg_obj = await tg_client.send_file(
-#                                     peer, bio, caption=text or "", supports_streaming=True,
-#                                     reply_to=reply_to_id, progress_callback=cb
-#                                 )
-#                             else:
-#                                 msg_obj = await tg_client.send_file(
-#                                     peer, bio, caption=text or "", reply_to=reply_to_id,
-#                                     progress_callback=cb
-#                                 )
-#
-#                         # 3) DB finalize + final ack
-#                         await archive_outgoing_finalize(db, phone, int(chat_id), pre["temp_id"], msg_obj)
-#                         ws_send({
-#                             "action": "send_done",
-#                             "temp_id": pre["temp_id"],
-#                             "msg_id": int(getattr(msg_obj, "id", 0)),
-#                             "date": getattr(msg_obj, "date", datetime.now(timezone.utc)).isoformat()
-#                         })
-#
-#                     except Exception as e:
-#                         err = {"status": "error", "detail": str(e)}
-#                         if pre:
-#                             err.update({"action": "send_failed", "temp_id": pre["temp_id"]})
-#                         ws_send(err)
-#
-#                 asyncio.run_coroutine_threadsafe(do_send(), loop)
-#
-#             else:
-#                 ws_send({"status": "error", "detail": "unknown action"})
-#
-#     except Exception as e:
-#         if "closed" in str(e).lower():
-#             print(f"ℹ️ [chat_ws] client closed: {e}")
-#         else:
-#             print(f"⚠️ [chat_ws] Exception: {e}")
-#     finally:
-#         # shutdown
-#         alive = False
-#         out_q.put(None)
-#         # cancel typing timers
-#         for t in list(typing_timers.values()):
-#             try: t.cancel()
-#             except: pass
-#         try:
-#             if tg_client:
-#                 asyncio.run_coroutine_threadsafe(tg_client.disconnect(), loop).result(timeout=5)
-#         except Exception:
-#             pass
-#         print("❌ [chat_ws] disconnected")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# =========================
-# 🔌 WebSocket: /chat_ws  (sleep-free, active-client aware)
-# =========================
 
 from threading import RLock
 ACTIVE_TG: dict[str, TelegramClient] = {}
@@ -2250,38 +1402,191 @@ async def _verify_deleted_for_chat(phone: str, chat_id: int, access_hash: int | 
 
 
 
+
+from telethon import types as TL
+
+async def _resolve_peer_any(client, chat_id: int, access_hash: int | None):
+    """
+    Try to resolve a peer by (chat_id, access_hash) with multiple fallbacks.
+    Works for users, supergroups/channels, and basic groups.
+    """
+    # If we have access_hash, attempt precise InputPeer* first
+    if access_hash is not None:
+        try:
+            return TL.InputPeerUser(int(chat_id), int(access_hash))
+        except Exception:
+            try:
+                return TL.InputPeerChannel(int(chat_id), int(access_hash))
+            except Exception:
+                pass
+
+    # Without access_hash (or above failed), try get_entity
+    try:
+        return await client.get_entity(int(chat_id))
+    except Exception:
+        # Last resorts (won't always work; harmless if they fail)
+        try:
+            return TL.InputPeerChat(int(chat_id))
+        except Exception:
+            pass
+        try:
+            return TL.InputPeerChannel(abs(int(chat_id)), 0)
+        except Exception:
+            pass
+
+    return None
+
+
+
+
+
+
+
+
+
+
+
+async def _refresh_with_client(tg_client, phone: str, chat_id: int, access_hash: int | None,
+                               max_new: int = 50) -> int:
+    """
+    Pull newest messages from Telegram into Mongo BEFORE serving /messages.
+    - If DB has history: fetch only messages with id > last_id (min_id=last_id)
+    - If DB is empty: seed latest `max_new` messages
+    Returns: number of upserted messages.
+    """
+    MSG_COL = db.messages
+
+    peer = await _resolve_peer_any(tg_client, chat_id, access_hash)
+    if not peer:
+        return 0
+
+    # Highest msg_id already in DB
+    last = MSG_COL.find_one(
+        {"phone": str(phone), "chat_id": int(chat_id), "msg_id": {"$type": "number"}},
+        sort=[("msg_id", -1)]
+    )
+    last_id = int(last["msg_id"]) if last and isinstance(last.get("msg_id"), int) else None
+
+    upserted = 0
+    if last_id:
+        # Only newer than what we have
+        async for msg in tg_client.iter_messages(peer, min_id=last_id):
+            await _upsert_message_from_msg(tg_client, phone, int(chat_id), access_hash, msg)
+            upserted += 1
+            if upserted >= max_new:
+                break
+    else:
+        # DB empty → seed latest N
+        async for msg in tg_client.iter_messages(peer, limit=max_new):
+            await _upsert_message_from_msg(tg_client, phone, int(chat_id), access_hash, msg)
+            upserted += 1
+
+    return upserted
+
+
+
+
+
+
+def _refresh_latest_messages(phone: str, chat_id: int, access_hash: int | None,
+                             max_new: int = 50) -> int:
+    """
+    Synchronous wrapper used by /messages.
+    Prefers the ACTIVE_TG client (so WS won't disconnect). Fallback: ephemeral client.
+    """
+    import asyncio
+
+    # Try active client first (registered by /chat_ws)
+    try:
+        with ACTIVE_TG_LOCK:
+            active = ACTIVE_TG.get(phone)
+    except NameError:
+        active = None
+
+    if active and active.is_connected() and getattr(active, "loop", None) and active.loop.is_running():
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                _refresh_with_client(active, phone, int(chat_id), access_hash, max_new=max_new),
+                active.loop
+            )
+            return int(fut.result(timeout=25) or 0)
+        except Exception:
+            pass
+
+    # Fallback: ephemeral client (connect → refresh → disconnect)
+    async def _ephemeral():
+        c = await get_client(phone)
+        await c.connect()
+        try:
+            if not await c.is_user_authorized():
+                return 0
+            n = await _refresh_with_client(c, phone, int(chat_id), access_hash, max_new=max_new)
+            return n
+        finally:
+            try:
+                await c.disconnect()
+            except:
+                pass
+
+    loop2 = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop2)
+    try:
+        return int(loop2.run_until_complete(_ephemeral()) or 0)
+    finally:
+        try:
+            loop2.close()
+        except:
+            pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route("/messages", methods=["GET"])
 def get_messages():
     """
-    Mongo-first message feed with deterministic ordering + optional live verify.
+    Mongo-first message feed with deterministic ordering + lazy refresh + live existence check.
 
     Query params:
       - phone=...                (required)
       - chat_id=...              (required, int)
-      - access_hash=...          (optional, int)  -> not mandatory here
+      - access_hash=...          (optional, int)
       - limit=50                 (optional, default 50, max 500)
       - order=asc|desc           (optional, default asc)  -> we will return the OPPOSITE order
-      - verify_deleted=1         (optional)  -> live reconcile last 300 ids via Telethon; mark deleted_on_telegram=True
-      - only_deleted=1           (optional)  -> return only deleted ones from Mongo
-      - hide_deleted=1           (optional)  -> exclude deleted ones from Mongo
+      - refresh_latest=0|1       (optional, default 1)    -> pull latest from Telegram before reading Mongo
+      - refresh_count=N          (optional, default 50, max 200) -> how many to pull
+      - verify_deleted=0|1       (optional, default 1)    -> live check returned ids for existence
+      - only_deleted=1           (optional)  -> return only deleted ones from Mongo (per DB flag)
+      - hide_deleted=1           (optional)  -> exclude deleted ones from Mongo (per DB flag)
       - patch_db=0|1             (optional, default 1)    -> write tombstones after live-check
 
     Response:
       {
         "status":"ok",
         "order_requested": "asc|desc",
-        "order_returned":  "desc|asc",     # opposite of requested
+        "order_returned":  "desc|asc",
         "count": N,
-        "verify_deleted": {...}            # when verify_deleted=1
-        "messages":[ ... ]                 # ordered per order_returned
+        "verify_deleted": {...},          # when verify is on
+        "messages":[ ... ]                 # each has exists_on_telegram: true|false
       }
     """
     from flask import request, jsonify
     from datetime import datetime
-    import math
+    import asyncio
 
-    # ---------- parse & normalize ----------
     q = request.args
+
+    # --- required args ---
     phone = q.get("phone")
     if not phone:
         return jsonify({"status": "error", "detail": "phone is required"}), 400
@@ -2291,14 +1596,20 @@ def get_messages():
     except (TypeError, ValueError):
         return jsonify({"status": "error", "detail": "chat_id (int) is required"}), 400
 
-    # caller's desired order; we will intentionally FLIP it
+    # optional access_hash (helps resolve peer)
+    try:
+        access_hash = int(q.get("access_hash")) if q.get("access_hash") not in (None, "",) else None
+    except Exception:
+        access_hash = None
+
+    # --- order (flip the requested one) ---
     order = (q.get("order", "asc") or "asc").lower()
     if order not in ("asc", "desc"):
         order = "asc"
-    effective_order = "desc" if order == "asc" else "asc"   # ← flip
+    effective_order = "desc" if order == "asc" else "asc"
     sort_dir = 1 if effective_order == "asc" else -1
 
-    # limits
+    # --- limits ---
     try:
         limit = int(q.get("limit", 50))
     except ValueError:
@@ -2307,10 +1618,27 @@ def get_messages():
 
     only_deleted   = str(q.get("only_deleted", "0")).lower()   in ("1", "true", "yes")
     hide_deleted   = str(q.get("hide_deleted", "0")).lower()   in ("1", "true", "yes")
-    verify_deleted = str(q.get("verify_deleted", "0")).lower() in ("1", "true", "yes")
+    verify_deleted = str(q.get("verify_deleted", "1")).lower() in ("1", "true", "yes")
     patch_db       = str(q.get("patch_db", "1")).lower()       in ("1", "true", "yes")
 
-    # ---------- build Mongo filter ----------
+    # --- NEW: optional lazy refresh from Telegram (DEFAULT ON) ---
+    refresh_latest = str(q.get("refresh_latest", "1")).lower() in ("1", "true", "yes")
+    try:
+        refresh_count = int(q.get("refresh_count", 50))
+    except Exception:
+        refresh_count = 50
+    refresh_count = max(1, min(refresh_count, 200))
+
+    if refresh_latest:
+        try:
+            _ = _refresh_latest_messages(
+                phone=phone, chat_id=chat_id, access_hash=access_hash, max_new=refresh_count
+            )
+        except Exception:
+            # Even if refresh fails, we still return what's in Mongo
+            pass
+
+    # --- Mongo filter ---
     match = {"phone": phone, "chat_id": chat_id}
     if only_deleted:
         match["deleted_on_telegram"] = True
@@ -2320,86 +1648,80 @@ def get_messages():
             {"deleted_on_telegram": False},
         ]
 
-    # ---------- query Mongo in the flipped order ----------
+    # --- query Mongo in the flipped order (deterministic multi-key sort) ---
     cursor = db.messages.find(match).sort([
-        ("msg_id", sort_dir),   # primary for deterministic paging
-        ("date",   sort_dir),   # secondary if msg_id missing
-        ("_id",    sort_dir),   # tie-breaker
+        ("msg_id", sort_dir),
+        ("date",   sort_dir),
+        ("_id",    sort_dir),
     ]).limit(limit)
-
     docs = list(cursor)
 
-    # ---------- optional live verify (last 300 ids) ----------
+    # --- live existence check for returned docs (if enabled) ---
+    existing_ids_page = None   # type: set|None
     verify_info = None
-    if verify_deleted:
-        try:
-            ids_to_check = [d.get("msg_id") for d in db.messages.find(
-                {"phone": phone, "chat_id": chat_id, "msg_id": {"$ne": None}},
-                {"msg_id": 1}
-            ).sort([("msg_id", -1)]).limit(300)]
-            ids_to_check = [i for i in ids_to_check if isinstance(i, int)]
 
-            missing_ids = []
-            tg_client = None
+    if verify_deleted:
+        ids_page = [int(d["msg_id"]) for d in docs if isinstance(d.get("msg_id"), int)]
+
+        def _check_with_active(ids) -> set | None:
+            # try using active client from /chat_ws
             try:
-                # ACTIVE_TG / ACTIVE_TG_LOCK expected in your global scope
                 with ACTIVE_TG_LOCK:
                     tg_client = ACTIVE_TG.get(phone)
             except NameError:
                 tg_client = None
+            if not (tg_client and tg_client.is_connected() and getattr(tg_client, "loop", None) and tg_client.loop.is_running()):
+                return None
 
-            if tg_client and tg_client.is_connected() and getattr(tg_client, "loop", None) and tg_client.loop.is_running():
-                import asyncio
-                from telethon import types as TL
+            from telethon import types as TL
 
-                async def _check():
-                    # try resolving best-effort by chat_id (user/channel/chat)
-                    peer = None
-                    if chat_id > 0:
-                        for peer_try in (TL.PeerUser(chat_id), TL.PeerChannel(chat_id)):
-                            try:
-                                peer = await tg_client.get_entity(peer_try)
-                                if peer: break
-                            except Exception:
-                                pass
-                    else:
-                        for peer_try in (TL.PeerChannel(abs(chat_id)), TL.PeerChat(abs(chat_id))):
-                            try:
-                                peer = await tg_client.get_entity(peer_try)
-                                if peer: break
-                            except Exception:
-                                pass
-                    if not peer:
-                        return []
+            async def _check():
+                # resolve peer best-effort
+                peer = await _resolve_peer_any(tg_client, chat_id, access_hash)
+                if not peer or not ids:
+                    return set()
+                exist = set()
+                BATCH = 100
+                for i in range(0, len(ids), BATCH):
+                    part = ids[i:i+BATCH]
+                    res = await tg_client.get_messages(peer, ids=part)
+                    if not isinstance(res, list):
+                        res = [res]
+                    for mid, msg in zip(part, res):
+                        if msg is not None:
+                            exist.add(mid)
+                return exist
 
-                    missing = []
-                    batch = 100
-                    for i in range(0, len(ids_to_check), batch):
-                        part = ids_to_check[i:i+batch]
-                        res = await tg_client.get_messages(peer, ids=part)
-                        # Telethon returns None for deleted/missing ids at aligned positions
-                        for mid, msg in zip(part, res):
-                            if msg is None:
-                                missing.append(mid)
-                    return missing
-
+            try:
                 fut = asyncio.run_coroutine_threadsafe(_check(), tg_client.loop)
-                missing_ids = fut.result(timeout=15)
-            else:
-                verify_info = "skipped (no active telegram client for this phone)"
+                return fut.result(timeout=20)
+            except Exception:
+                return None
 
-            if patch_db and missing_ids:
-                db.messages.update_many(
-                    {"phone": phone, "chat_id": chat_id, "msg_id": {"$in": missing_ids}},
-                    {"$set": {"deleted_on_telegram": True}}
+        # 1) Prefer active client
+        existing_ids_page = _check_with_active(ids_page)
+
+        # 2) Fallback to the async helper that probes with ephemeral client (defined elsewhere)
+        if existing_ids_page is None:
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    _probe_existing_ids(phone=phone, chat_id=chat_id, access_hash=access_hash, ids=ids_page),
+                    loop  # uses your global loop that runs forever
                 )
+                existing_ids_page = fut.result(timeout=30) or set()
+            except Exception:
+                existing_ids_page = set()
 
-            if verify_info is None:
-                verify_info = {"checked": len(ids_to_check), "deleted_found": len(missing_ids)}
-        except Exception as e:
-            verify_info = f"verify error: {e.__class__.__name__}: {e}"
+        removed = set(ids_page) - set(existing_ids_page)
+        if patch_db and removed:
+            db.messages.update_many(
+                {"phone": phone, "chat_id": chat_id, "msg_id": {"$in": list(removed)}},
+                {"$set": {"deleted_on_telegram": True}}
+            )
 
-    # ---------- transform for JSON ----------
+        verify_info = {"checked": len(ids_page), "deleted_found": len(removed)}
+
+    # --- transform for JSON ---
     def _to_json(doc):
         d = dict(doc)
         _id = d.pop("_id", None)
@@ -2408,6 +1730,16 @@ def get_messages():
         dt = d.get("date")
         if isinstance(dt, datetime):
             d["date"] = dt.isoformat()
+
+        # Accurate exists_on_telegram:
+        mid = d.get("msg_id")
+        deleted_flag = bool(d.get("deleted_on_telegram", False))
+        if verify_deleted and isinstance(mid, int) and (existing_ids_page is not None):
+            exists = mid in existing_ids_page
+        else:
+            exists = (mid is not None) and (not deleted_flag)
+        d["exists_on_telegram"] = bool(exists)
+
         return d
 
     out = [_to_json(d) for d in docs]
@@ -2434,142 +1766,6 @@ def get_messages():
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-# @app.route("/message_media")
-# def message_media():
-#     """
-#     Serves media from Mongo GridFS if available; otherwise download from Telegram,
-#     save to GridFS with correct content_type, update doc, and serve inline.
-#     """
-#     from telethon import types
-#     from flask import send_file, make_response
-#     from io import BytesIO
-#
-#     phone = request.args.get("phone")
-#     chat_id = request.args.get("chat_id")
-#     access_hash = request.args.get("access_hash")
-#     msg_id = request.args.get("msg_id")
-#
-#     if not all([phone, chat_id, msg_id]):
-#         return "Bad Request", 400
-#
-#     chat_id = int(chat_id)
-#     msg_id = int(msg_id)
-#     access_hash = int(access_hash) if access_hash not in (None, "",) else None
-#
-#     MSG_COL = db.messages
-#     fs = GridFS(db, collection="fs")
-#
-#     # 1) Try GridFS first
-#     from bson.objectid import ObjectId
-#     doc = MSG_COL.find_one({"phone": phone, "chat_id": chat_id, "msg_id": msg_id})
-#     if doc and doc.get("media_fs_id"):
-#         try:
-#             gf = fs.get(ObjectId(doc["media_fs_id"]))
-#             data = gf.read()
-#             resp = make_response(data)
-#             # Correct MIME + inline
-#             mime = getattr(gf, "content_type", None) or "application/octet-stream"
-#             fname = getattr(gf, "filename", None) or "file.bin"
-#             resp.headers["Content-Type"] = mime
-#             resp.headers["Content-Disposition"] = f'inline; filename="{fname}"'
-#             # optional CORS (Flutter web)
-#             resp.headers["Access-Control-Allow-Origin"] = "*"
-#             return resp
-#         except Exception:
-#             pass  # fallback to Telegram
-#
-#     # 2) Fallback to Telegram → download → save to FS → update doc → return
-#     import asyncio
-#
-#     async def fetch_from_telegram():
-#         tg_client = await get_client(phone)
-#         await tg_client.connect()
-#         try:
-#             # resolve entity robustly
-#             peer = None
-#             if access_hash is not None:
-#                 try:
-#                     peer = types.InputPeerUser(chat_id, access_hash)
-#                 except Exception:
-#                     try:
-#                         peer = types.InputPeerChannel(chat_id, access_hash)
-#                     except Exception:
-#                         peer = types.InputPeerChat(chat_id)
-#             if peer is None:
-#                 try:
-#                     peer = await tg_client.get_entity(int(chat_id))
-#                 except Exception:
-#                     peer = types.InputPeerChat(chat_id)
-#
-#             msg = await tg_client.get_messages(peer, ids=msg_id)
-#             if not msg or not getattr(msg, "media", None):
-#                 await tg_client.disconnect()
-#                 return None, None, None
-#
-#             blob = await msg.download_media(bytes)
-#             mime, fname = _guess_msg_media_meta(msg)
-#             await tg_client.disconnect()
-#             return blob, mime, fname
-#         except Exception:
-#             try:
-#                 await tg_client.disconnect()
-#             except:
-#                 pass
-#             return None, None, None
-#
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-#     data, mime, fname = loop.run_until_complete(fetch_from_telegram())
-#     if not data:
-#         return "No media", 404
-#
-#     # Save to FS with correct content_type
-#     fs_id = _put_fs(db, data, filename=fname, content_type=mime)
-#     MSG_COL.update_one(
-#         {"phone": phone, "chat_id": chat_id, "msg_id": msg_id},
-#         {"$set": {"media_fs_id": fs_id}},
-#         upsert=True
-#     )
-#
-#     # Return inline
-#     resp = make_response(data)
-#     resp.headers["Content-Type"] = mime or "application/octet-stream"
-#     resp.headers["Content-Disposition"] = f'inline; filename="{fname or "file.bin"}"'
-#     resp.headers["Access-Control-Allow-Origin"] = "*"
-#     return resp
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# -------------------------------
-# Reuse the WS client to fetch media (no extra connections)
-# -------------------------------
 async def _fetch_media_with_client(tg_client, chat_id: int, access_hash: int | None, msg_id: int):
     """
     Uses an already-connected Telethon client to fetch a single message's media as bytes.
@@ -4280,9 +3476,384 @@ def join_group():
 
 
 
+#=========================================================================
+#Grooup
+#========================================================
 
 
 
+# =========================
+# 👥 /group_members — list members for basic group (Chat) and megagroup/channel
+# =========================
+from flask import request, jsonify
+from telethon.tl import types as T
+from telethon.tl.functions.messages import GetFullChatRequest
+from telethon.tl.functions.channels import GetFullChannelRequest, GetParticipantsRequest
+from telethon.tl.types import (
+    ChannelParticipantsAdmins, ChannelParticipantAdmin, ChannelParticipantCreator,
+    UserStatusOnline, UserStatusOffline, UserStatusRecently, UserStatusLastWeek, UserStatusLastMonth
+)
+
+def _status_to_text(s):
+    try:
+        if isinstance(s, UserStatusOnline):
+            return "online", getattr(s, "expires", None).isoformat() if getattr(s, "expires", None) else None
+        if isinstance(s, UserStatusOffline):
+            return "offline", getattr(s, "was_online", None).isoformat() if getattr(s, "was_online", None) else None
+        if isinstance(s, UserStatusRecently):
+            return "recently", None
+        if isinstance(s, UserStatusLastWeek):
+            return "last_week", None
+        if isinstance(s, UserStatusLastMonth):
+            return "last_month", None
+    except:
+        pass
+    return "unknown", None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def _user_dict(u: T.User, phone: str, role: str = "member"):
+#     st, when = _status_to_text(getattr(u, "status", None))
+#     full_name = ((u.first_name or "") + (" " + u.last_name if getattr(u, "last_name", None) else "")).strip()
+#     if not full_name:
+#         full_name = (u.username or "")
+#     avatar_url = f"/avatar_redirect?phone={phone}&username={u.username}" if getattr(u, "username", None) else None
+#     return {
+#         "id": int(getattr(u, "id", 0)),
+#         "access_hash": int(getattr(u, "access_hash", 0)) if getattr(u, "access_hash", None) else None,
+#         "username": getattr(u, "username", None),
+#         "first_name": getattr(u, "first_name", None),
+#         "last_name": getattr(u, "last_name", None),
+#         "name": full_name,
+#         "phone": getattr(u, "phone", None),
+#         "bot": bool(getattr(u, "bot", False)),
+#         "verified": bool(getattr(u, "verified", False)),
+#         "scam": bool(getattr(u, "scam", False)),
+#         "restricted": bool(getattr(u, "restricted", False)),
+#         "status": st,
+#         "last_seen": when,
+#         "role": role,
+#         "avatar_url": avatar_url
+#     }
+
+
+
+
+
+
+
+def _user_dict(u: T.User, phone: str, role: str = "member"):
+    """
+    Normalize a Telethon User → lightweight dict for /group_members.
+    - status → "online" | "offline" | "recently" | "last_week" | "last_month" | "unknown"
+    - last_seen/status_time → ISO-8601 or None
+    - avatar_url points to /avatar_redirect (only if username exists)
+    """
+    st, when = _status_to_text(getattr(u, "status", None))
+
+    full_name = (
+        ((u.first_name or "") + (" " + u.last_name if getattr(u, "last_name", None) else "")).strip()
+        or (u.username or "")
+    )
+
+    avatar_url = (
+        f"/avatar_redirect?phone={phone}&username={u.username}"
+        if getattr(u, "username", None) else None
+    )
+
+    return {
+        "id": int(getattr(u, "id", 0) or 0),
+        "access_hash": int(getattr(u, "access_hash", 0)) if getattr(u, "access_hash", None) else None,
+        "username": getattr(u, "username", None),
+        "first_name": getattr(u, "first_name", None),
+        "last_name": getattr(u, "last_name", None),
+        "name": full_name,
+        "phone": getattr(u, "phone", None),
+
+        "bot": bool(getattr(u, "bot", False)),
+        "verified": bool(getattr(u, "verified", False)),
+        "scam": bool(getattr(u, "scam", False)),
+        "restricted": bool(getattr(u, "restricted", False)),
+
+        "status": st,            # "online"|"offline"|"recently"|...
+        "last_seen": when,       # ISO-8601 or None
+        "role": role,            # "creator"|"admin"|"member"
+
+        "has_photo": bool(getattr(u, "photo", None)),
+        "avatar_url": avatar_url
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+async def _resolve_group_or_channel(client, chat_id: int, access_hash: int | None):
+    """
+    Robust resolver:
+      1) Try basic group (Chat) via GetFullChatRequest(chat_id) -> ("chat", full_chat, None)
+      2) Else try megagroup/channel:
+         - if access_hash: InputPeerChannel(chat_id, access_hash) -> entity
+         - else: PeerChannel(chat_id) -> entity
+         -> ("channel", None, channel_entity)
+    Raises if neither path works.
+    """
+    # 1) Basic group (types.Chat) — entity ছাড়াই full আনা যায়
+    try:
+        full = await client(GetFullChatRequest(chat_id))
+        return "chat", full, None
+    except Exception:
+        pass
+
+    # 2) Channel / Megagroup
+    ent = None
+    if access_hash is not None:
+        try:
+            ent = T.InputPeerChannel(int(chat_id), int(access_hash))
+            ent = await client.get_entity(ent)
+            return "channel", None, ent
+        except Exception:
+            ent = None
+    try:
+        ent = await client.get_entity(T.PeerChannel(int(chat_id)))
+        return "channel", None, ent
+    except Exception:
+        pass
+
+    # Fallback: InputPeerChat (বিরল কেসে কাজে লাগে)
+    try:
+        _ = await client.get_entity(T.InputPeerChat(int(chat_id)))  # ensure exists
+        full = await client(GetFullChatRequest(chat_id))
+        return "chat", full, None
+    except Exception as e:
+        raise e
+
+@app.route("/group_members", methods=["GET"])
+def group_members():
+    """
+    GET /group_members?phone=...&(chat_id=... | username=@group)
+       [&access_hash=...]  # only needed for channels when available
+       [&limit=100&offset=0&search=jo&include_roles=0]
+
+    Response: {
+      status: "ok",
+      group: { chat_id, access_hash, type, title, username, is_megagroup, participants_count },
+      count, offset, limit, total_candidates,
+      members: [ {id, username, name, status, last_seen, role, ...} ]
+    }
+    """
+    q = request.args
+    phone = (q.get("phone") or "").strip()
+    if not phone:
+        return jsonify({"status": "error", "detail": "phone missing"}), 400
+
+    username = (q.get("username") or "").strip()
+    chat_id = None
+    if q.get("chat_id"):
+        try:
+            chat_id = int(q.get("chat_id"))
+        except Exception:
+            return jsonify({"status": "error", "detail": "chat_id must be int"}), 400
+
+    try:
+        access_hash = int(q.get("access_hash")) if q.get("access_hash") not in (None, "",) else None
+    except Exception:
+        access_hash = None
+
+    try:
+        limit  = max(1, min(int(q.get("limit", 100)), 500))
+    except Exception:
+        limit = 100
+    try:
+        offset = max(0, int(q.get("offset", 0)))
+    except Exception:
+        offset = 0
+
+    search = (q.get("search") or "").strip()
+    include_roles = str(q.get("include_roles", "0")).lower() in ("1", "true", "yes")
+
+    async def do_list():
+        client = await get_client(phone)
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                return {"code": 401, "body": {"status": "error", "detail": "not authorized"}}
+
+            # -------- resolve (username or chat_id) --------
+            kind = None
+            full_chat = None
+            chan_ent = None
+
+            if username:
+                ent = await client.get_entity(username[1:] if username.startswith("@") else username)
+                if isinstance(ent, T.Chat):
+                    kind = "chat"
+                    full_chat = await client(GetFullChatRequest(ent.id))
+                elif isinstance(ent, T.Channel):
+                    kind = "channel"
+                    chan_ent = ent
+                else:
+                    await client.disconnect()
+                    return {"code": 400, "body": {"status": "error", "detail": "not a group/channel entity"}}
+            else:
+                # chat_id path — এখানে কখনোই সরাসরি get_entity(int(chat_id)) করবো না
+                try:
+                    kind, full_chat, chan_ent = await _resolve_group_or_channel(client, chat_id, access_hash)
+                except Exception as e:
+                    await client.disconnect()
+                    return {"code": 400, "body": {"status": "error", "detail": str(e)}}
+
+            members_out = []
+            participants_count = None
+            total_candidates = 0
+
+            if kind == "chat":
+                # ---- BASIC GROUP (types.Chat) ----
+                fc = full_chat.full_chat
+                participants_count = getattr(fc, "participants_count", None)
+
+                part = getattr(fc, "participants", None)
+                if not isinstance(part, T.ChatParticipants):
+                    # e.g., ChatParticipantsForbidden
+                    await client.disconnect()
+                    return {"code": 400, "body": {"status": "error", "detail": "participants list not available for this group"}}
+
+                ids = [int(p.user_id) for p in part.participants if getattr(p, "user_id", None)]
+                users_by_id = {int(u.id): u for u in getattr(full_chat, "users", [])}
+                users = []
+                s = (search or "").lower()
+                for uid in ids:
+                    u = users_by_id.get(uid)
+                    if not u:
+                        try:
+                            u = await client.get_entity(uid)
+                        except Exception:
+                            continue
+                    if s:
+                        blob = ((u.first_name or "") + " " + (u.last_name or "") + " " + (u.username or "")).lower()
+                        if s not in blob:
+                            continue
+                    users.append(u)
+
+                total_candidates = len(users)
+                page = users[offset:offset+limit]
+                members_out = [_user_dict(u, phone, role="member") for u in page]
+
+                group_meta = {
+                    "chat_id": int(getattr(fc, "id", 0) or getattr(full_chat, "id", 0) or chat_id),
+                    "access_hash": None,  # basic group এর access_hash থাকে না
+                    "type": "Chat",
+                    "title": getattr(fc, "about", None) or getattr(full_chat, "title", None) or "",
+                    "username": None,
+                    "is_megagroup": False,
+                    "participants_count": participants_count
+                }
+
+            elif kind == "channel":
+                # ---- MEGAGROUP / CHANNEL ----
+                is_megagroup = bool(getattr(chan_ent, "megagroup", False))
+                try:
+                    f = await client(GetFullChannelRequest(chan_ent))
+                    participants_count = getattr(f.full_chat, "participants_count", None)
+                except Exception:
+                    pass
+
+                # Optional: collect admin/creator roles
+                role_map = {}
+                if include_roles and is_megagroup:
+                    try:
+                        offs = 0
+                        while True:
+                            res = await client(GetParticipantsRequest(
+                                channel=chan_ent,
+                                filter=ChannelParticipantsAdmins(),
+                                offset=offs, limit=200, hash=0
+                            ))
+                            parts = getattr(res, "participants", None) or []
+                            if not parts:
+                                break
+                            for p in parts:
+                                uid = int(getattr(p, "user_id", 0))
+                                if isinstance(p, ChannelParticipantCreator):
+                                    role_map[uid] = "creator"
+                                elif isinstance(p, ChannelParticipantAdmin):
+                                    role_map[uid] = "admin"
+                                else:
+                                    role_map[uid] = "admin"
+                            if len(parts) < 200:
+                                break
+                            offs += len(parts)
+                    except Exception:
+                        role_map = {}
+
+                # Server-side participants with search
+                want = offset + limit
+                users = []
+                async for u in client.iter_participants(
+                    chan_ent, search=(search or None), aggressive=True, limit=want
+                ):
+                    users.append(u)
+                total_candidates = len(users)
+                page = users[offset:offset+limit]
+                members_out = [_user_dict(u, phone, role=role_map.get(int(u.id), "member")) for u in page]
+
+                group_meta = {
+                    "chat_id": int(getattr(chan_ent, "id", 0)),
+                    "access_hash": int(getattr(chan_ent, "access_hash", 0)) if getattr(chan_ent, "access_hash", None) else None,
+                    "type": "Channel",
+                    "title": getattr(chan_ent, "title", None) or "",
+                    "username": getattr(chan_ent, "username", None),
+                    "is_megagroup": is_megagroup,
+                    "participants_count": participants_count
+                }
+
+            else:
+                await client.disconnect()
+                return {"code": 400, "body": {"status": "error", "detail": "unrecognized entity kind"}}
+
+            body = {
+                "status": "ok",
+                "group": group_meta,
+                "count": len(members_out),
+                "offset": offset,
+                "limit": limit,
+                "members": members_out,
+                "total_candidates": total_candidates
+            }
+            await client.disconnect()
+            return {"code": 200, "body": body}
+
+        except Exception as e:
+            try:
+                await client.disconnect()
+            except:
+                pass
+            return {"code": 500, "body": {"status": "error", "detail": str(e)}}
+
+    # run on the shared event loop to avoid blocking Flask
+    fut = asyncio.run_coroutine_threadsafe(do_list(), loop)
+    res = fut.result(timeout=60)
+    return jsonify(res["body"]), res["code"]
 
 
 
