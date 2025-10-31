@@ -51,6 +51,56 @@ except Exception:
 
 
 
+from telethon import types as T
+
+async def resolve_any_peer(client, target, chat_id=None, access_hash=None):
+    """
+    target হতে পারে: '@user_or_group', username, numeric id string,
+    অথবা dict: {'type':'user|channel|chat', 'chat_id':..., 'access_hash':...}
+    """
+    # dict ⇒ explicit peer
+    if isinstance(target, dict):
+        t = (target.get('type') or '').lower()
+        cid = int(target['chat_id'])
+        ah  = target.get('access_hash')
+        if t == 'user':    return T.InputPeerUser(cid, int(ah))
+        if t == 'channel': return T.InputPeerChannel(cid, int(ah))
+        if t == 'chat':    return T.InputPeerChat(cid)
+        # fall through if type missing
+
+    # string username
+    if isinstance(target, str):
+        s = target.strip()
+        if s.startswith('@'):
+            return await client.get_entity(s[1:])
+        if s.isdigit():
+            # numeric id: প্রথমে channel (megagroup), তারপর basic chat, শেষে user
+            i = int(s)
+            try:
+                return await client.get_entity(T.PeerChannel(i))
+            except Exception:
+                try:
+                    return await client.get_entity(T.PeerChat(i))
+                except Exception:
+                    return await client.get_entity(i)
+        # সাধারণ নাম/username
+        return await client.get_entity(s)
+
+    # fallback: chat_id + access_hash দেওয়া থাকলে
+    if chat_id:
+        if access_hash is not None:
+            # আগে channel চেষ্টা করুন; না হলে user; সবশেষে chat
+            try:  return T.InputPeerChannel(int(chat_id), int(access_hash))
+            except Exception:
+                try:  return T.InputPeerUser(int(chat_id), int(access_hash))
+                except Exception:
+                    return T.InputPeerChat(int(chat_id))
+        # access_hash নেই ⇒ entity থেকে আনুন
+        try:  return await client.get_entity(T.PeerChannel(int(chat_id)))
+        except Exception:
+            try:  return await client.get_entity(T.PeerChat(int(chat_id)))
+            except Exception:
+                return await client.get_entity(int(chat_id))
 
 
 
@@ -435,6 +485,187 @@ from telethon.tl.types import (
     MessageService, MessageActionPhoneCall,
     InputPeerUser, InputPeerChannel, InputPeerChat,
 )
+
+
+
+
+
+
+async def do_send(
+    *,
+    phone: str,
+    to,                               # '@username' | numeric id | {'type':..., 'chat_id':..., 'access_hash':...}
+    text: str | None = None,          # caption হিসেবেও যাবে
+    reply_to: int | None = None,
+    media_bytes: bytes | None = None,
+    media_name: str | None = None,
+    force_document: bool = False,
+    parse_mode: str | None = "md"
+) -> dict:
+    import os
+    from urllib.parse import urlencode, quote_plus
+    from flask import has_request_context, request
+    from telethon import types as T
+    from telethon.errors import (
+        ChatWriteForbiddenError, FloodWaitError, PeerIdInvalidError,
+        UserPrivacyRestrictedError
+    )
+
+    # === local helpers inside do_send ===
+    PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+
+    def _abs_base() -> str:
+        """Request context থাকলে সেখান থেকে; না থাকলে ENV; ফ্যালব্যাক localhost."""
+        if has_request_context():
+            return (request.url_root or "http://127.0.0.1:8080/").rstrip("/")
+        return PUBLIC_BASE_URL or "http://127.0.0.1:8080"
+
+    def _media_kind(msg) -> str | None:
+        """Telethon Message → 'image' | 'video' | 'audio' | 'file' | None"""
+        if not msg or not getattr(msg, "media", None):
+            return None
+        m = msg.media
+        if isinstance(m, T.MessageMediaPhoto):
+            return "image"
+        if isinstance(m, T.MessageMediaDocument):
+            mime = (getattr(m.document, "mime_type", "") or "").lower()
+            if mime.startswith("video/"):
+                return "video"
+            if mime.startswith("audio/"):
+                return "audio"
+            if mime.startswith("image/"):
+                return "image"
+            return "file"
+        return "file"
+    # === end local helpers ===
+
+    # 1) client auth
+    client = await get_client(phone)
+    await client.connect()
+    if not await client.is_user_authorized():
+        return {"status": "error", "detail": "not authorized"}
+
+    # 2) resolve peer
+    try:
+        peer = await resolve_any_peer(client, to)
+    except Exception as e:
+        return {"status": "error", "detail": f"peer resolve failed: {e!s}"}
+
+    # 3) send
+    try:
+        if media_bytes is not None:
+            uf = await client.upload_file(media_bytes, file_name=media_name or "upload.bin")
+            sent = await client.send_file(
+                peer,
+                uf,
+                caption=text or "",
+                reply_to=reply_to,
+                force_document=force_document,
+                parse_mode=parse_mode
+            )
+        else:
+            sent = await client.send_message(
+                peer,
+                text or "",
+                reply_to=reply_to,
+                parse_mode=parse_mode
+            )
+    except ChatWriteForbiddenError:
+        return {"status": "error", "detail": "ChatWriteForbiddenError: no write permission"}
+    except UserPrivacyRestrictedError:
+        return {"status": "error", "detail": "UserPrivacyRestrictedError: recipient privacy blocks messaging"}
+    except PeerIdInvalidError:
+        return {"status": "error", "detail": "PeerIdInvalidError: invalid peer"}
+    except FloodWaitError as e:
+        return {"status": "error", "detail": f"FloodWaitError: wait {getattr(e,'seconds', '?')}s"}
+    except Exception as e:
+        return {"status": "error", "detail": f"send failed: {e!s}"}
+
+    # 4) peer metadata (chat_id / access_hash / type)
+    chat_id = None
+    access_hash = None
+    peer_type = None
+    try:
+        if isinstance(sent.peer_id, T.PeerChannel):
+            peer_type = "channel"
+            chat_id = sent.peer_id.channel_id
+            try:
+                ent = await client.get_entity(T.PeerChannel(chat_id))
+                access_hash = getattr(ent, "access_hash", None)
+            except Exception:
+                pass
+        elif isinstance(sent.peer_id, T.PeerUser):
+            peer_type = "user"
+            chat_id = sent.peer_id.user_id
+            try:
+                ent = await client.get_entity(chat_id)
+                access_hash = getattr(ent, "access_hash", None)
+            except Exception:
+                pass
+        else:
+            peer_type = "chat"
+            chat_id = sent.peer_id.chat_id
+    except Exception:
+        pass
+
+    # 5) media link (if any)
+    media_type = _media_kind(sent)
+    media_link = None
+    if media_type:
+        base = _abs_base()
+        p = phone if str(phone).startswith("+") else f"+{phone}"
+        params = {"phone": p, "chat_id": chat_id, "msg_id": sent.id}
+        if access_hash is not None:
+            params["access_hash"] = str(access_hash)
+        media_link = f"{base}/message_media?{urlencode(params, quote_via=quote_plus)}"
+
+    # 6) sender id
+    sender_id = None
+    try:
+        if sent.from_id and isinstance(sent.from_id, T.PeerUser):
+            sender_id = sent.from_id.user_id
+    except Exception:
+        pass
+
+    # 7) response
+    return {
+        "status": "ok",
+        "message": {
+            "id": sent.id,
+            "text": sent.message or "",
+            "sender_id": sender_id,
+            "date": sent.date.isoformat(),
+            "is_out": bool(sent.out),
+            "reply_to": getattr(sent, "reply_to_msg_id", None),
+            "media_type": media_type,
+            "media_link": media_link,
+            "deleted_on_telegram": False,
+            "exists_on_telegram": True,
+            "peer": {"type": peer_type, "chat_id": chat_id, "access_hash": access_hash},
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 @sock.route("/chat_ws")
 def chat_ws(ws):
@@ -909,6 +1140,22 @@ def chat_ws(ws):
         except Exception:
             pass
         print("❌ [chat_ws] disconnected")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2055,150 +2302,297 @@ async def _fetch_media_with_client(tg_client, chat_id: int, access_hash: int | N
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-@app.route("/message_media")
+@app.get("/message_media")
 def message_media():
     """
-    Serves media from Mongo GridFS if available; otherwise downloads from Telegram,
-    saves to GridFS with correct content_type, updates the doc, and serves inline.
-    ⚠️ It first tries to reuse the active Telethon client from /chat_ws to avoid
-       parallel connections that can disconnect the listener.
-    Query:
-      - phone (str, required)
-      - chat_id (int, required)
-      - msg_id (int, required)
-      - access_hash (int, optional)
+    উদাহরণ:
+    GET /message_media?phone=+8801...&chat_id=7884400604&msg_id=546&access_hash=-389606182307716397
+
+    কী করে:
+    - কোয়েরি প্যারাম পার্স করে
+    - আগে GridFS ক্যাশে আছে কি না দেখে (থাকলে সেখান থেকেই স্ট্রিম করে)
+    - না থাকলে Telegram থেকে মিডিয়া বাইট ডাউনলোড করে
+    - GridFS-এ ক্যাশ করে + DB আপডেট করে
+    - সাথে সাথে রেসপন্স দেয় (Cache-Control/Accept-Ranges হেডার সহ)
+      → Flutter এর Image.network-এ “প্রথমবারে ছবি না দেখা/স্ক্রিনে ফিরে এলে দেখা” টাইপ বাগ কমে যায়
+    নির্ভরতা:
+    - গ্লোবাল db / ACTIVE_TG / get_client / loop / fs থাকলে ব্যবহার করে
+    - fs না থাকলে ফাংশনের ভেতরেই GridFS হ্যান্ডেল বানিয়ে নেয়
     """
-    from flask import make_response
-    from gridfs import GridFS
-    from bson.objectid import ObjectId
-    import asyncio
 
-    phone = request.args.get("phone")
-    chat_id = request.args.get("chat_id")
-    access_hash = request.args.get("access_hash")
-    msg_id = request.args.get("msg_id")
+    # -------- কেবল এই ফাংশনের ভিতরে দরকারি import/utility ----------
+    from flask import request, send_file
+    from bson import ObjectId
+    import asyncio, io, mimetypes, traceback
 
-    if not all([phone, chat_id, msg_id]):
-        return "Bad Request", 400
-
+    # Telethon টাইপস (ফাইলনেম/এনটিটি ধরতে)
     try:
-        chat_id = int(chat_id)
-        msg_id = int(msg_id)
-        access_hash = int(access_hash) if access_hash not in (None, "",) else None
+        from telethon import types
     except Exception:
-        return "Bad Request", 400
+        types = None  # না থাকলেও ফাংশন ‘ডিগ্রেডেড’ মোডে চলবে
 
-    MSG_COL = db.messages
-    fs = GridFS(db, collection="fs")
+    # ==== গ্লোবাল রিসোর্স যাচাই ====
+    db = globals().get("db")
+    if db is None:
+        return ("server misconfigured: global 'db' is missing", 500)
 
-    # 1) Try GridFS cache first
-    doc = MSG_COL.find_one({"phone": phone, "chat_id": chat_id, "msg_id": msg_id})
-    if doc and doc.get("media_fs_id"):
+    # গ্লোবাল fs থাকলে সেটাই; না থাকলে এখানেই বানাই
+    def _gridfs_handle():
+        fs_obj = globals().get("fs")
+        if fs_obj is not None:
+            return fs_obj
         try:
-            gf = fs.get(ObjectId(doc["media_fs_id"]))
-            data = gf.read()
-            mime = getattr(gf, "content_type", None) or "application/octet-stream"
-            fname = getattr(gf, "filename", None) or "file.bin"
+            from gridfs import GridFS
+            return GridFS(db)
+        except Exception as e:
+            raise RuntimeError(f"GridFS unavailable: {e}")
 
-            resp = make_response(data)
-            resp.headers["Content-Type"] = mime
-            resp.headers["Content-Disposition"] = f'inline; filename="{fname}"'
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+    # async কাজ রান করার হেল্পার (গ্লোবাল loop থাকলে সেটায়, নইলে লোকাল লুপে)
+    def _run_async_local(awaitable):
+        loop = globals().get("loop")
+        try:
+            if loop and getattr(loop, "is_running", lambda: False)():
+                fut = asyncio.run_coroutine_threadsafe(awaitable, loop)
+                return fut.result()
         except Exception:
-            # fall through to Telegram fetch if FS read fails
             pass
+        try:
+            loop2 = asyncio.get_event_loop()
+        except RuntimeError:
+            loop2 = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop2)
+        return loop2.run_until_complete(awaitable)
 
-    # 2) Fetch from Telegram — prefer active, connected client from /chat_ws
-    def fetch_via_active():
-        with ACTIVE_TG_LOCK:
-            c = ACTIVE_TG.get(phone)
-        if not c:
+    # access_hash পার্স (খালি/‘null’/নেগেটিভ—সব হ্যান্ডেল)
+    def _parse_access_hash_local(val):
+        if val is None:
+            return None
+        s = str(val).strip()
+        if not s or s.lower() == "null":
             return None
         try:
-            fut = asyncio.run_coroutine_threadsafe(
-                _fetch_media_with_client(c, chat_id, access_hash, msg_id),
-                loop
-            )
-            return fut.result(timeout=25)
+            return int(s)
         except Exception:
             return None
 
-    triple = fetch_via_active()
-
-    if triple:
-        data, mime, fname = triple
-    else:
-        # 3) Fallback: ephemeral client ONLY if no active client available
-        async def fetch_ephemeral():
-            tg_client = await get_client(phone)
-            await tg_client.connect()
-            try:
-                if not await tg_client.is_user_authorized():
-                    await tg_client.disconnect()
-                    return None, None, None
-                res = await _fetch_media_with_client(tg_client, chat_id, access_hash, msg_id)
-                await tg_client.disconnect()
-                return res
-            except Exception:
-                try:
-                    await tg_client.disconnect()
-                except:
-                    pass
-                return None, None, None
-
-        loop2 = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop2)
+    # Telethon Message থেকে mime ও filename বের করা
+    def _infer_mime_and_filename(msg, fallback_name):
+        name, mime = None, None
         try:
-            data, mime, fname = loop2.run_until_complete(fetch_ephemeral())
-        finally:
+            if getattr(msg, "document", None):
+                mime = getattr(msg.document, "mime_type", None)
+                for attr in (msg.document.attributes or []):
+                    if types and isinstance(attr, types.DocumentAttributeFilename):
+                        name = attr.file_name
+                        break
+            elif getattr(msg, "photo", None):
+                name = f"{fallback_name}.jpg"
+                mime = "image/jpeg"
+        except Exception:
+            pass
+        if not mime and name:
+            mime = mimetypes.guess_type(name)[0]
+        if not mime:
+            mime = "application/octet-stream"
+        if not name:
+            name = fallback_name
+        return mime, name
+
+    # লগইন করা TelegramClient তোলা (ACTIVE_TG থেকে)
+    class _NullLock:
+        def __enter__(self): return None
+        def __exit__(self, a, b, c): return False
+
+    ACTIVE_TG = globals().get("ACTIVE_TG", {})
+    ACTIVE_TG_LOCK = globals().get("ACTIVE_TG_LOCK") or _NullLock()
+
+    def _pick_active_client(phone_variants):
+        with ACTIVE_TG_LOCK:
+            for k in phone_variants:
+                c = ACTIVE_TG.get(k)
+                if c:
+                    return c
+        return None
+
+    # entity resolve (channel/user/chat—সব কভার; DB peers থেকেও ফলোব্যাক)
+    def _resolve_entity(client, phone_variants, chat_id, access_hash):
+        # ১) access_hash থাকলে Channel হিসেবে চেষ্টা
+        if access_hash is not None and types:
             try:
-                loop2.close()
+                ip = types.InputPeerChannel(channel_id=int(chat_id), access_hash=int(access_hash))
+                return _run_async_local(client.get_entity(ip))
             except Exception:
                 pass
+        # ২) সরাসরি int(chat_id) দিয়ে
+        try:
+            return _run_async_local(client.get_entity(int(chat_id)))
+        except Exception:
+            pass
+        # ৩) DB peers টেবিল (থাকলে)
+        try:
+            peer_doc = db.peers.find_one({"chat_id": int(chat_id), "phone": {"$in": phone_variants}})
+            if peer_doc:
+                ah = peer_doc.get("access_hash")
+                if types:
+                    if peer_doc.get("is_channel") and ah is not None:
+                        ip = types.InputPeerChannel(channel_id=int(chat_id), access_hash=int(ah))
+                        return _run_async_local(client.get_entity(ip))
+                    if peer_doc.get("is_user") and ah is not None:
+                        ip = types.InputPeerUser(user_id=int(chat_id), access_hash=int(ah))
+                        return _run_async_local(client.get_entity(ip))
+                    if peer_doc.get("is_chat"):
+                        ip = types.InputPeerChat(chat_id=int(chat_id))
+                        return _run_async_local(client.get_entity(ip))
+        except Exception:
+            pass
+        # ৪) পুরনো ছোট গ্রুপ (megagroup নয়) হলে
+        if types:
+            ip = types.InputPeerChat(chat_id=int(chat_id))
+            return _run_async_local(client.get_entity(ip))
+        # শেষ ভরসা—আবারও brute force
+        return _run_async_local(client.get_entity(int(chat_id)))
 
-    if not data:
-        return "No media", 404
-
-    # 4) Save to GridFS with correct MIME and update Mongo doc
+    # ---------------- প্যারাম পার্সিং ----------------
     try:
-        fs_id = _put_fs(db, data, filename=(fname or "file.bin"), content_type=(mime or "application/octet-stream"))
-        MSG_COL.update_one(
-            {"phone": phone, "chat_id": chat_id, "msg_id": msg_id},
-            {"$set": {
-                "media_fs_id": fs_id,
-                "file_name": fname,
-                "mime_type": mime
-            }},
-            upsert=True
-        )
+        raw_phone = (request.args.get("phone") or "").strip()
+        if not raw_phone:
+            return ("missing phone", 400)
+        phone_no_plus = raw_phone.lstrip("+")
+        chat_id = int(request.args.get("chat_id") or 0)
+        msg_id = int(request.args.get("msg_id") or 0)
+        if not chat_id or not msg_id:
+            return ("missing chat_id/msg_id", 400)
+
+        # প্রোজেক্টে যদি গ্লোবাল _parse_access_hash থাকে, সেটাই; নইলে লোকাল
+        _parse_access_hash = globals().get("_parse_access_hash") or _parse_access_hash_local
+        access_hash = _parse_access_hash(request.args.get("access_hash"))
+    except Exception:
+        return ("bad request", 400)
+
+    fs_obj = _gridfs_handle()
+    MSG_COL = db.messages
+
+    # --------------- (১) GridFS ক্যাশে হিট চেক ---------------
+    try:
+        doc = MSG_COL.find_one({"phone": phone_no_plus, "chat_id": int(chat_id), "msg_id": int(msg_id)})
+        if doc and doc.get("media_fs_id"):
+            try:
+                fs_id = doc["media_fs_id"]
+                if not isinstance(fs_id, ObjectId):
+                    fs_id = ObjectId(fs_id)
+                grid_out = fs_obj.get(fs_id)
+                filename = doc.get("file_name") or f"media_{msg_id}"
+                mime = doc.get("mime_type") or "application/octet-stream"
+
+                resp = send_file(
+                    grid_out,
+                    mimetype=mime,
+                    download_name=filename,
+                    as_attachment=False,
+                    max_age=86400,  # ১ দিন ক্যাশ
+                )
+                resp.headers["Cache-Control"] = "public, max-age=86400"
+                resp.headers["Accept-Ranges"] = "bytes"
+                return resp
+            except Exception:
+                # পয়েন্টার ভাঙা/মিসম্যাচ—নিচে নেটওয়ার্ক থেকে টানব
+                pass
+    except Exception:
+        pass  # ক্যাশ অংশ ফেল করলেও ক্রিটিকাল না
+
+    # --------------- (২) Telegram client তোলা ---------------
+    phone_variants = [raw_phone, phone_no_plus, "+" + phone_no_plus]
+    client = _pick_active_client(phone_variants)
+
+    if not client:
+        get_client = globals().get("get_client")
+        if not callable(get_client):
+            return ("server misconfigured: global 'get_client(phone)' is missing", 500)
+        client = get_client(phone_no_plus)
+        if asyncio.iscoroutine(client):
+            client = _run_async_local(client)
+        try:
+            _run_async_local(client.connect())
+            if not _run_async_local(client.is_user_authorized()):
+                return ("not authorized", 403)
+        except Exception as e:
+            return (f"connect/auth failed: {e}", 502)
+
+    # --------------- (৩) access_hash না থাকলে DB থেকে ফলো-আপ ---------------
+    if access_hash is None:
+        try:
+            if doc and doc.get("access_hash") is not None:
+                access_hash = int(doc["access_hash"])
+            else:
+                peer_row = db.peers.find_one({"chat_id": int(chat_id), "phone": {"$in": phone_variants}})
+                if peer_row and peer_row.get("access_hash") is not None:
+                    access_hash = int(peer_row["access_hash"])
+        except Exception:
+            pass
+
+    # --------------- (৪) entity resolve + message ফেচ ---------------
+    try:
+        entity = _resolve_entity(client, phone_variants, chat_id, access_hash)
     except Exception as e:
-        # If FS write failed, still serve inline from memory
-        pass
+        return (f"peer resolve failed: {e}", 404)
 
-    # 5) Serve inline with proper headers (CORS-friendly)
-    from flask import make_response
-    resp = make_response(data)
-    resp.headers["Content-Type"] = mime or "application/octet-stream"
-    resp.headers["Content-Disposition"] = f'inline; filename="{(fname or "file.bin")}"'
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    # Optional cache headers:
-    # resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    return resp
+    try:
+        msg = _run_async_local(client.get_messages(entity, ids=int(msg_id)))
+        if not msg:
+            return ("message not found", 404)
+    except Exception as e:
+        return (f"get_messages failed: {e}", 502)
+
+    # --------------- (৫) মিডিয়া বাইট নামানো ---------------
+    try:
+        media_bytes = _run_async_local(client.download_media(msg, bytes))
+        if not media_bytes:
+            return ("no downloadable media", 415)  # মিডিয়া নেই/ডাউনলোডযোগ্য নয়
+    except Exception as e:
+        return (f"download failed: {e}", 502)
+
+    # --------------- (৬) mime/filename নির্ধারণ → GridFS-এ সংরক্ষণ → DB আপডেট → রেসপন্স ---------------
+    try:
+        mime, filename = _infer_mime_and_filename(msg, f"media_{msg_id}")
+
+        fs_id = fs_obj.put(
+            media_bytes,
+            filename=filename,
+            metadata={
+                "phone": phone_no_plus,
+                "chat_id": int(chat_id),
+                "msg_id": int(msg_id),
+                "mime": mime,
+            },
+        )
+
+        MSG_COL.update_one(
+            {"phone": phone_no_plus, "chat_id": int(chat_id), "msg_id": int(msg_id)},
+            {"$set": {
+                "media_fs_id": str(fs_id),
+                "mime_type": mime,
+                "file_name": filename,
+                "access_hash": access_hash,
+                "exists_on_telegram": True,
+            }},
+            upsert=True,
+        )
+
+        bio = io.BytesIO(media_bytes)
+        bio.seek(0)
+        resp = send_file(
+            bio,
+            mimetype=mime,
+            download_name=filename,
+            as_attachment=False,
+            max_age=86400,
+        )
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        resp.headers["Accept-Ranges"] = "bytes"
+        return resp
+    except Exception as e:
+        traceback.print_exc()
+        return (f"cache/response failed: {e}", 500)
 
 
 
@@ -2211,7 +2605,219 @@ def message_media():
 
 
 
-# ---------- FULL: Mongo-first archivers ----------
+
+
+
+
+
+# @app.get("/message_media")
+# def message_media():
+#     # --- local imports so this stays self-contained ---
+#     import json
+#     from io import BytesIO
+#     from bson.objectid import ObjectId
+#     from gridfs import GridFS
+#     from telethon.tl import types as T, functions
+#     import asyncio
+#
+#     # ---------- local helpers (scoped to this route) ----------
+#     def _parse_access_hash_local(val):
+#         if val is None:
+#             return None
+#         s = str(val).strip().lower()
+#         if s in ("", "0", "null", "none", "undefined"):
+#             return None
+#         try:
+#             return int(s)
+#         except Exception:
+#             return None
+#
+#     def _run_async_local(coro, timeout=30):
+#         # uses your global background loop started at boot
+#         _loop = globals().get("loop")
+#         if _loop is None:
+#             # fallback (not ideal, but prevents hard crash if loop missing)
+#             return asyncio.run(coro)
+#         return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=timeout)
+#
+#     async def _resolve_peer_any_local(client, chat_id: int, access_hash: int | None):
+#         # Try explicit InputPeer* if we have a hash
+#         if access_hash is not None:
+#             try:
+#                 return await client.get_entity(T.InputPeerChannel(channel_id=chat_id, access_hash=access_hash))
+#             except Exception:
+#                 try:
+#                     return await client.get_entity(T.InputPeerUser(user_id=chat_id, access_hash=access_hash))
+#                 except Exception:
+#                     try:
+#                         return await client.get_entity(T.PeerChat(chat_id))
+#                     except Exception:
+#                         pass
+#         # No/invalid hash → try generic guesses
+#         for guess in (T.PeerChannel(chat_id), T.PeerChat(chat_id), T.PeerUser(chat_id)):
+#             try:
+#                 return await client.get_entity(guess)
+#             except Exception:
+#                 continue
+#         # last resort
+#         return await client.get_entity(chat_id)
+#
+#     def _guess_filename_mime(msg, fallback_name):
+#         """
+#         Returns (filename, mime)
+#         Handles document/photo/voice/video/sticker/etc as best-effort.
+#         """
+#         filename = None
+#         mime = "application/octet-stream"
+#
+#         # Document (files, video, voice, sticker-as-document, etc.)
+#         if getattr(msg, "document", None):
+#             docobj = msg.document
+#             mime = getattr(docobj, "mime_type", mime) or mime
+#             # Try explicit filename attribute
+#             for attr in (getattr(docobj, "attributes", []) or []):
+#                 if isinstance(attr, T.DocumentAttributeFilename):
+#                     filename = attr.file_name
+#                     break
+#             # If still None, infer from mime / sticker attribute
+#             if not filename:
+#                 # Sticker?
+#                 is_sticker = any(isinstance(a, T.DocumentAttributeSticker) for a in (docobj.attributes or []))
+#                 # Common mime → ext map
+#                 ext = {
+#                     "image/jpeg": "jpg",
+#                     "image/png": "png",
+#                     "image/webp": "webp",
+#                     "video/mp4": "mp4",
+#                     "video/webm": "webm",
+#                     "audio/ogg": "ogg",
+#                     "audio/mpeg": "mp3",
+#                     "application/pdf": "pdf",
+#                     "application/zip": "zip",
+#                 }.get(mime, "bin" if not is_sticker else "webp")
+#                 filename = f"{fallback_name}.{ext}"
+#
+#         # Photo (no explicit mime on media; treat as jpeg)
+#         elif getattr(msg, "photo", None):
+#             filename = f"{fallback_name}.jpg"
+#             mime = "image/jpeg"
+#
+#         # Web preview / empty media fallback
+#         else:
+#             filename = f"{fallback_name}.bin"
+#
+#         return filename, mime
+#
+#     # ---------- parse query ----------
+#     try:
+#         phone = (request.args.get("phone") or "").strip().lstrip("+")
+#         chat_id = int(request.args.get("chat_id") or 0)
+#         msg_id  = int(request.args.get("msg_id") or 0)
+#         access_hash = _parse_access_hash_local(request.args.get("access_hash"))
+#     except Exception:
+#         return ("bad request", 400)
+#
+#     if not phone or not chat_id or not msg_id:
+#         return ("missing params", 400)
+#
+#     # ---------- db/gridfs ----------
+#     MSG_COL = db.messages
+#     # ensure fs is available even if not global
+#     _fs = globals().get("fs")
+#     if _fs is None:
+#         _fs = GridFS(db, collection="fs")
+#
+#     # ---------- 1) If cached in GridFS → serve ----------
+#     doc = MSG_COL.find_one({"phone": phone, "chat_id": int(chat_id), "msg_id": int(msg_id)})
+#     if doc and doc.get("media_fs_id"):
+#         try:
+#             grid_out = _fs.get(ObjectId(doc["media_fs_id"]))
+#             mime = (doc.get("mime_type") or "application/octet-stream")
+#             filename = doc.get("file_name") or f"media_{msg_id}"
+#             # Flask will stream GridOut; conditional=True adds ETag/If-Modified-Since support
+#             return send_file(
+#                 grid_out, mimetype=mime, as_attachment=False, download_name=filename,
+#                 max_age=31536000, conditional=True
+#             )
+#         except Exception:
+#             # fall through to live fetch if cache read fails
+#             pass
+#
+#     # ---------- 2) Live fetch from Telegram, then cache ----------
+#     try:
+#         # Reuse active client if present
+#         with ACTIVE_TG_LOCK:
+#             client = ACTIVE_TG.get(phone)
+#         if not client:
+#             client = _run_async_local(get_client(phone))
+#             _run_async_local(client.connect())
+#             if not _run_async_local(client.is_user_authorized()):
+#                 return ("not authorized", 403)
+#
+#         peer = _run_async_local(_resolve_peer_any_local(client, int(chat_id), access_hash))
+#
+#         m = _run_async_local(client.get_messages(peer, ids=int(msg_id)))
+#         # Sometimes Telethon returns a list even for single id
+#         if isinstance(m, list):
+#             m = m[0] if m else None
+#
+#         if not m:
+#             return ("not found", 404)
+#
+#         if not getattr(m, "media", None) and not getattr(m, "photo", None) and not getattr(m, "document", None):
+#             return ("no media", 404)
+#
+#         # Decide filename/mime
+#         filename, mime = _guess_filename_mime(m, f"file_{msg_id}")
+#
+#         # Download to memory
+#         bio = BytesIO()
+#         _run_async_local(client.download_media(m, file=bio))
+#         bio.seek(0)
+#
+#         # Save to GridFS (cache) for later
+#         try:
+#             fs_id = _fs.put(bio.getvalue(), filename=filename, contentType=mime)
+#             update = {"media_fs_id": str(fs_id), "mime_type": mime, "file_name": filename}
+#             if doc:
+#                 MSG_COL.update_one({"_id": doc["_id"]}, {"$set": update})
+#             else:
+#                 MSG_COL.update_one(
+#                     {"phone": phone, "chat_id": int(chat_id), "msg_id": int(msg_id)},
+#                     {"$set": update},
+#                     upsert=True
+#                 )
+#             # read back a fresh GridFS stream so send_file can use a file-like with length
+#             bio = _fs.get(fs_id)
+#         except Exception:
+#             # Fallback: serve from in-memory buffer even if GridFS save failed
+#             bio.seek(0)
+#
+#         return send_file(
+#             bio, mimetype=mime, as_attachment=False,
+#             download_name=(filename or f"media_{msg_id}"),
+#             max_age=31536000, conditional=True
+#         )
+#
+#     except Exception as e:
+#         msg = str(e).lower()
+#         if "could not find" in msg or "not found" in msg:
+#             return ("not found", 404)
+#         return (json.dumps({"status": "error", "detail": str(e)}), 500)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 async def archive_incoming_event(
     db,
     phone: str,
@@ -4348,6 +4954,9 @@ from telethon.errors import (
     UsernameNotOccupiedError,
     PeerIdInvalidError,
 )
+
+
+
 
 @app.post("/create_group")
 def create_group():
