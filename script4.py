@@ -2605,219 +2605,6 @@ def message_media():
 
 
 
-
-
-
-
-
-# @app.get("/message_media")
-# def message_media():
-#     # --- local imports so this stays self-contained ---
-#     import json
-#     from io import BytesIO
-#     from bson.objectid import ObjectId
-#     from gridfs import GridFS
-#     from telethon.tl import types as T, functions
-#     import asyncio
-#
-#     # ---------- local helpers (scoped to this route) ----------
-#     def _parse_access_hash_local(val):
-#         if val is None:
-#             return None
-#         s = str(val).strip().lower()
-#         if s in ("", "0", "null", "none", "undefined"):
-#             return None
-#         try:
-#             return int(s)
-#         except Exception:
-#             return None
-#
-#     def _run_async_local(coro, timeout=30):
-#         # uses your global background loop started at boot
-#         _loop = globals().get("loop")
-#         if _loop is None:
-#             # fallback (not ideal, but prevents hard crash if loop missing)
-#             return asyncio.run(coro)
-#         return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=timeout)
-#
-#     async def _resolve_peer_any_local(client, chat_id: int, access_hash: int | None):
-#         # Try explicit InputPeer* if we have a hash
-#         if access_hash is not None:
-#             try:
-#                 return await client.get_entity(T.InputPeerChannel(channel_id=chat_id, access_hash=access_hash))
-#             except Exception:
-#                 try:
-#                     return await client.get_entity(T.InputPeerUser(user_id=chat_id, access_hash=access_hash))
-#                 except Exception:
-#                     try:
-#                         return await client.get_entity(T.PeerChat(chat_id))
-#                     except Exception:
-#                         pass
-#         # No/invalid hash → try generic guesses
-#         for guess in (T.PeerChannel(chat_id), T.PeerChat(chat_id), T.PeerUser(chat_id)):
-#             try:
-#                 return await client.get_entity(guess)
-#             except Exception:
-#                 continue
-#         # last resort
-#         return await client.get_entity(chat_id)
-#
-#     def _guess_filename_mime(msg, fallback_name):
-#         """
-#         Returns (filename, mime)
-#         Handles document/photo/voice/video/sticker/etc as best-effort.
-#         """
-#         filename = None
-#         mime = "application/octet-stream"
-#
-#         # Document (files, video, voice, sticker-as-document, etc.)
-#         if getattr(msg, "document", None):
-#             docobj = msg.document
-#             mime = getattr(docobj, "mime_type", mime) or mime
-#             # Try explicit filename attribute
-#             for attr in (getattr(docobj, "attributes", []) or []):
-#                 if isinstance(attr, T.DocumentAttributeFilename):
-#                     filename = attr.file_name
-#                     break
-#             # If still None, infer from mime / sticker attribute
-#             if not filename:
-#                 # Sticker?
-#                 is_sticker = any(isinstance(a, T.DocumentAttributeSticker) for a in (docobj.attributes or []))
-#                 # Common mime → ext map
-#                 ext = {
-#                     "image/jpeg": "jpg",
-#                     "image/png": "png",
-#                     "image/webp": "webp",
-#                     "video/mp4": "mp4",
-#                     "video/webm": "webm",
-#                     "audio/ogg": "ogg",
-#                     "audio/mpeg": "mp3",
-#                     "application/pdf": "pdf",
-#                     "application/zip": "zip",
-#                 }.get(mime, "bin" if not is_sticker else "webp")
-#                 filename = f"{fallback_name}.{ext}"
-#
-#         # Photo (no explicit mime on media; treat as jpeg)
-#         elif getattr(msg, "photo", None):
-#             filename = f"{fallback_name}.jpg"
-#             mime = "image/jpeg"
-#
-#         # Web preview / empty media fallback
-#         else:
-#             filename = f"{fallback_name}.bin"
-#
-#         return filename, mime
-#
-#     # ---------- parse query ----------
-#     try:
-#         phone = (request.args.get("phone") or "").strip().lstrip("+")
-#         chat_id = int(request.args.get("chat_id") or 0)
-#         msg_id  = int(request.args.get("msg_id") or 0)
-#         access_hash = _parse_access_hash_local(request.args.get("access_hash"))
-#     except Exception:
-#         return ("bad request", 400)
-#
-#     if not phone or not chat_id or not msg_id:
-#         return ("missing params", 400)
-#
-#     # ---------- db/gridfs ----------
-#     MSG_COL = db.messages
-#     # ensure fs is available even if not global
-#     _fs = globals().get("fs")
-#     if _fs is None:
-#         _fs = GridFS(db, collection="fs")
-#
-#     # ---------- 1) If cached in GridFS → serve ----------
-#     doc = MSG_COL.find_one({"phone": phone, "chat_id": int(chat_id), "msg_id": int(msg_id)})
-#     if doc and doc.get("media_fs_id"):
-#         try:
-#             grid_out = _fs.get(ObjectId(doc["media_fs_id"]))
-#             mime = (doc.get("mime_type") or "application/octet-stream")
-#             filename = doc.get("file_name") or f"media_{msg_id}"
-#             # Flask will stream GridOut; conditional=True adds ETag/If-Modified-Since support
-#             return send_file(
-#                 grid_out, mimetype=mime, as_attachment=False, download_name=filename,
-#                 max_age=31536000, conditional=True
-#             )
-#         except Exception:
-#             # fall through to live fetch if cache read fails
-#             pass
-#
-#     # ---------- 2) Live fetch from Telegram, then cache ----------
-#     try:
-#         # Reuse active client if present
-#         with ACTIVE_TG_LOCK:
-#             client = ACTIVE_TG.get(phone)
-#         if not client:
-#             client = _run_async_local(get_client(phone))
-#             _run_async_local(client.connect())
-#             if not _run_async_local(client.is_user_authorized()):
-#                 return ("not authorized", 403)
-#
-#         peer = _run_async_local(_resolve_peer_any_local(client, int(chat_id), access_hash))
-#
-#         m = _run_async_local(client.get_messages(peer, ids=int(msg_id)))
-#         # Sometimes Telethon returns a list even for single id
-#         if isinstance(m, list):
-#             m = m[0] if m else None
-#
-#         if not m:
-#             return ("not found", 404)
-#
-#         if not getattr(m, "media", None) and not getattr(m, "photo", None) and not getattr(m, "document", None):
-#             return ("no media", 404)
-#
-#         # Decide filename/mime
-#         filename, mime = _guess_filename_mime(m, f"file_{msg_id}")
-#
-#         # Download to memory
-#         bio = BytesIO()
-#         _run_async_local(client.download_media(m, file=bio))
-#         bio.seek(0)
-#
-#         # Save to GridFS (cache) for later
-#         try:
-#             fs_id = _fs.put(bio.getvalue(), filename=filename, contentType=mime)
-#             update = {"media_fs_id": str(fs_id), "mime_type": mime, "file_name": filename}
-#             if doc:
-#                 MSG_COL.update_one({"_id": doc["_id"]}, {"$set": update})
-#             else:
-#                 MSG_COL.update_one(
-#                     {"phone": phone, "chat_id": int(chat_id), "msg_id": int(msg_id)},
-#                     {"$set": update},
-#                     upsert=True
-#                 )
-#             # read back a fresh GridFS stream so send_file can use a file-like with length
-#             bio = _fs.get(fs_id)
-#         except Exception:
-#             # Fallback: serve from in-memory buffer even if GridFS save failed
-#             bio.seek(0)
-#
-#         return send_file(
-#             bio, mimetype=mime, as_attachment=False,
-#             download_name=(filename or f"media_{msg_id}"),
-#             max_age=31536000, conditional=True
-#         )
-#
-#     except Exception as e:
-#         msg = str(e).lower()
-#         if "could not find" in msg or "not found" in msg:
-#             return ("not found", 404)
-#         return (json.dumps({"status": "error", "detail": str(e)}), 500)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 async def archive_incoming_event(
     db,
     phone: str,
@@ -5134,6 +4921,114 @@ def create_group():
     except Exception as e:
         return jsonify({"status": "error", "detail": f"{type(e).__name__}: {e}"}), 400
 # ----------------------- END ONLY THIS ROUTE -----------------------
+#==================================
+# Delete message
+#===================================
+
+
+
+
+
+from flask import request, jsonify
+from telethon.errors import ChatAdminRequiredError, MessageDeleteForbiddenError, RPCError
+
+async def _delete_messages_with_client(tg_client, phone: str, chat_id: int, access_hash: int | None,
+                                       msg_ids: list[int], revoke: bool = True) -> list[int]:
+    """
+    Telethon দিয়ে মেসেজ ডিলিট। সফল হলে ডিলিটেড id-গুলোর তালিকা রিটার্ন করে।
+    """
+    peer = await _resolve_peer_any(tg_client, chat_id, access_hash)
+    if not peer:
+        raise RuntimeError("peer resolve failed")
+
+    # Telethon বড় লিস্ট একবারে না দিয়ে ছোট ছোট চাঙ্কে দাও
+    deleted: list[int] = []
+    CHUNK = 100
+    for i in range(0, len(msg_ids), CHUNK):
+        part = msg_ids[i:i+CHUNK]
+        try:
+            # delete_messages(...) সফল হলে ওই part-টাই effectively ডিলিট হওয়া ধরে নেয়া যায়
+            await tg_client.delete_messages(peer, part, revoke=revoke)
+            deleted.extend(part)
+        except RPCError as e:
+            # কিছু delete না-ও হতে পারে; বাকি গুলো চেষ্টা চালাও
+            print(f"⚠️ delete chunk failed: {e}")
+    return sorted(set(deleted))
+
+@app.route("/delete_message", methods=["POST"])
+def delete_message():
+    data = request.get_json(silent=True) or {}
+    phone = (data.get("phone") or "").strip().replace(" ", "")
+    if not phone:
+        return jsonify({"status":"error","detail":"phone missing"}), 400
+
+    try:
+        chat_id = int(data.get("chat_id"))
+    except Exception:
+        return jsonify({"status":"error","detail":"chat_id (int) required"}), 400
+
+    # access_hash optional
+    try:
+        access_hash = int(data.get("access_hash")) if data.get("access_hash") not in (None, "",) else None
+    except Exception:
+        access_hash = None
+
+    # msg_ids normalize
+    raw_ids = data.get("msg_ids") or ([data.get("msg_id")] if data.get("msg_id") is not None else None)
+    if not raw_ids:
+        return jsonify({"status":"error","detail":"msg_ids or msg_id required"}), 400
+    try:
+        msg_ids = sorted({int(x) for x in raw_ids if x is not None})
+    except Exception:
+        return jsonify({"status":"error","detail":"msg_ids must be integers"}), 400
+    if not msg_ids:
+        return jsonify({"status":"error","detail":"empty msg_ids"}), 400
+
+    # revoke / for everyone
+    rv = data.get("revoke", True)
+    if isinstance(rv, str):
+        rv = rv.lower() in ("1","true","yes","y")
+    revoke = bool(rv)
+
+    async def do_delete():
+        # ACTIVE_TG থাকলে সেটাই নাও (WS ডিসকানেক্ট না করে)
+        with ACTIVE_TG_LOCK:
+            active = ACTIVE_TG.get(phone)
+        client = active
+        created_here = False
+        if not client:
+            client = await get_client(phone)
+            await client.connect()
+            created_here = True
+
+        try:
+            if not await client.is_user_authorized():
+                return {"code": 401, "body": {"status":"error","detail":"not authorized"}}
+
+            deleted = await _delete_messages_with_client(client, phone, chat_id, access_hash, msg_ids, revoke=revoke)
+
+            # Mongo tombstone update
+            if deleted:
+                db.messages.update_many(
+                    {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": deleted}},
+                    {"$set": {"deleted_on_telegram": True}}
+                )
+
+            return {"code": 200, "body": {"status":"ok","deleted": deleted, "requested": msg_ids, "revoke": revoke}}
+        except ChatAdminRequiredError:
+            return {"code": 403, "body": {"status":"error","detail":"admin rights required to delete in this chat"}}
+        except MessageDeleteForbiddenError:
+            return {"code": 403, "body": {"status":"error","detail":"deletion is not allowed for these messages"}}
+        except Exception as e:
+            return {"code": 500, "body": {"status":"error","detail": str(e)}}
+        finally:
+            if created_here:
+                try: await client.disconnect()
+                except: pass
+
+    fut = asyncio.run_coroutine_threadsafe(do_delete(), loop)
+    res = fut.result(timeout=60)
+    return jsonify(res["body"]), res["code"]
 
 
 
