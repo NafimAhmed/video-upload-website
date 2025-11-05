@@ -1585,154 +1585,6 @@ def get_dialogs():
 
 
 
-
-# ---------- FULL: /dialogs (fires background archiver immediately) ----------
-
-
-
-# @app.route("/dialogs", methods=["GET"])
-# def get_dialogs():
-#     """
-#     Telegram থেকে সমস্ত dialogs (chats, groups, channels) structured JSON-এ ফেরত দেয়।
-#     এই এন্ডপয়েন্ট হিট করলেই ব্যাকগ্রাউন্ডে সব ডায়ালগের সাম্প্রতিক মেসেজ MongoDB-তে আর্কাইভ শুরু হয়।
-#     Query params (optional):
-#       - archive_limit: per chat কতগুলো মেসেজ আর্কাইভ করবে (default 200)
-#       - dialog_limit: কয়টা ডায়ালগ স্ক্যান করবে (default 50)
-#     """
-#     phone = request.args.get("phone")
-#     if not phone:
-#         return jsonify({"status": "error", "detail": "phone missing"}), 400
-#
-#     # --- parse optional limits for archiver (without changing response shape) ---
-#     try:
-#         per_chat_limit = int(request.args.get("archive_limit", 200))
-#     except Exception:
-#         per_chat_limit = 200
-#     try:
-#         dialog_limit = int(request.args.get("dialog_limit", 50))
-#     except Exception:
-#         dialog_limit = 50
-#
-#     async def do_get_dialogs():
-#         from telethon.tl.functions.channels import GetFullChannelRequest
-#         from telethon.tl.functions.messages import GetFullChatRequest
-#         try:
-#             client = await get_client(phone)
-#             if not client.is_connected():
-#                 await client.connect()
-#
-#             if not await client.is_user_authorized():
-#                 await client.disconnect()
-#                 return {"status": "error", "detail": "not authorized"}
-#
-#             dialogs = []
-#             async for d in client.iter_dialogs(limit=50):
-#                 e = d.entity
-#                 msg = d.message
-#
-#                 last_msg = {
-#                     "id": getattr(msg, "id", None),
-#                     "text": getattr(msg, "message", None),
-#                     "date": getattr(msg, "date", None).isoformat() if getattr(msg, "date", None) else None,
-#                     "sender_id": getattr(getattr(msg, "from_id", None), "user_id", None),
-#                     "reply_to": getattr(getattr(msg, "reply_to", None), "reply_to_msg_id", None),
-#                     "media": str(type(getattr(msg, "media", None)).__name__) if getattr(msg, "media", None) else None,
-#                 } if msg else None
-#
-#                 participants_count = None
-#                 about = None
-#                 dc_id = getattr(getattr(e, "photo", None), "dc_id", None)
-#
-#                 try:
-#                     if d.is_channel:
-#                         full = await client(GetFullChannelRequest(e))
-#                         participants_count = getattr(full.full_chat, "participants_count", None)
-#                         about = getattr(full.full_chat, "about", None)
-#                     elif d.is_group:
-#                         full = await client(GetFullChatRequest(e.id))
-#                         participants_count = getattr(full.full_chat, "participants_count", None)
-#                         about = getattr(full.full_chat, "about", None)
-#                 except Exception:
-#                     pass
-#
-#                 dialog_info = {
-#                     "id": getattr(e, "id", None),
-#                     "name": getattr(e, "title", getattr(e, "username", str(e))),
-#                     "title": getattr(e, "title", None),
-#                     "first_name": getattr(e, "first_name", None),
-#                     "last_name": getattr(e, "last_name", None),
-#                     "username": getattr(e, "username", None),
-#                     "phone": getattr(e, "phone", None),
-#                     "about": about,
-#                     "access_hash": getattr(e, "access_hash", None),
-#                     "dc_id": dc_id,
-#                     "is_user": d.is_user,
-#                     "is_group": d.is_group,
-#                     "is_channel": d.is_channel,
-#                     "unread_count": d.unread_count,
-#                     "pinned": getattr(d, "pinned", False),
-#                     "verified": getattr(e, "verified", False),
-#                     "restricted": getattr(e, "restricted", False),
-#                     "bot": getattr(e, "bot", False),
-#                     "fake": getattr(e, "fake", False),
-#                     "scam": getattr(e, "scam", False),
-#                     "premium": getattr(e, "premium", False),
-#                     "participants_count": participants_count,
-#                     "has_photo": bool(getattr(e, "photo", None)),
-#                     "last_message": last_msg,
-#                 }
-#                 dialogs.append(dialog_info)
-#
-#             await client.disconnect()
-#             return {"status": "ok", "count": len(dialogs), "dialogs": dialogs}
-#
-#         except Exception as e:
-#             import traceback
-#             print("❌ Exception in /dialogs:\n", traceback.format_exc())
-#             return {"status": "error", "detail": str(e)}
-#
-#     # ✅ fetch dialogs (same as before)
-#     result = asyncio.run(do_get_dialogs())
-#
-#     # ✅ immediately kick off background archiver (non-blocking)
-#     try:
-#         asyncio.run_coroutine_threadsafe(
-#             archive_all_dialogs(phone=phone, per_chat_limit=per_chat_limit, dialog_limit=dialog_limit),
-#             loop  # <-- your global event loop already running
-#         )
-#         print(f"🧵 Archive job started for {phone} (limit {per_chat_limit}/chat, dialogs {dialog_limit})")
-#     except Exception as ex:
-#         print(f"⚠️ archive kickoff error: {ex}")
-#
-#     # ✅ Safe log + return original shape
-#     if result.get("status") == "ok":
-#         print(f"✅ Dialogs fetched successfully: {result.get('count', 0)} items.")
-#     else:
-#         print(f"⚠️ Dialog fetch error: {result.get('detail', 'unknown error')}")
-#
-#     return jsonify(result)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @app.route("/avatar_redirect", methods=["GET"])
 def avatar_redirect():
     phone = request.args.get("phone")
@@ -4929,8 +4781,34 @@ def create_group():
 
 
 
+
+
+
+
+
+
+import asyncio
+from datetime import datetime
 from flask import request, jsonify
 from telethon.errors import ChatAdminRequiredError, MessageDeleteForbiddenError, RPCError
+
+# ⬇️ নতুন ইমপোর্ট
+from gridfs import GridFS
+from bson import ObjectId
+from bson.errors import InvalidId
+
+fs = GridFS(db)  # db আগে থেকেই আছে ধরে নিচ্ছি (mongo_client[MONGO_DB])
+
+def _as_bool(v, default=False):
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int,)):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1","true","yes","y","on")
+    return default
 
 async def _delete_messages_with_client(tg_client, phone: str, chat_id: int, access_hash: int | None,
                                        msg_ids: list[int], revoke: bool = True) -> list[int]:
@@ -4941,13 +4819,11 @@ async def _delete_messages_with_client(tg_client, phone: str, chat_id: int, acce
     if not peer:
         raise RuntimeError("peer resolve failed")
 
-    # Telethon বড় লিস্ট একবারে না দিয়ে ছোট ছোট চাঙ্কে দাও
     deleted: list[int] = []
     CHUNK = 100
     for i in range(0, len(msg_ids), CHUNK):
         part = msg_ids[i:i+CHUNK]
         try:
-            # delete_messages(...) সফল হলে ওই part-টাই effectively ডিলিট হওয়া ধরে নেয়া যায়
             await tg_client.delete_messages(peer, part, revoke=revoke)
             deleted.extend(part)
         except RPCError as e:
@@ -4955,80 +4831,311 @@ async def _delete_messages_with_client(tg_client, phone: str, chat_id: int, acce
             print(f"⚠️ delete chunk failed: {e}")
     return sorted(set(deleted))
 
-@app.route("/delete_message", methods=["POST"])
-def delete_message():
-    data = request.get_json(silent=True) or {}
-    phone = (data.get("phone") or "").strip().replace(" ", "")
-    if not phone:
-        return jsonify({"status":"error","detail":"phone missing"}), 400
+def _maybe_object_id(x):
+    if isinstance(x, ObjectId):
+        return x
+    if isinstance(x, str):
+        try:
+            return ObjectId(x)
+        except (InvalidId, Exception):
+            return None
+    return None
 
+def _collect_gridfs_ids(doc: dict) -> set[ObjectId]:
+    """
+    মেসেজ ডকে সম্ভাব্য GridFS আইডি গুলো (file/thumbnail) কনজারভেটিভলি সংগ্রহ করি।
+    """
+    ids: set[ObjectId] = set()
+    # flat level
+    for k in ("gfs_id", "gridfs_id", "fs_id", "file_id", "thumb_gfs_id"):
+        v = doc.get(k)
+        oid = _maybe_object_id(v)
+        if oid: ids.add(oid)
+
+    # nested under media
+    media = (doc.get("media") or {}) if isinstance(doc.get("media"), dict) else {}
+    for k in ("gfs_id", "gridfs_id", "fs_id", "file_id", "thumb_gfs_id", "thumb_id"):
+        v = media.get(k)
+        oid = _maybe_object_id(v)
+        if oid: ids.add(oid)
+
+    return ids
+
+def _delete_messages_mongo(phone: str, chat_id: int, msg_ids: list[int],
+                           hard_delete: bool = True,
+                           delete_media: bool = True) -> dict:
+    """
+    MongoDB থেকে মেসেজগুলো ডিলিট/সফট-ডিলিট করো। চাইলে GridFS ফাইলও ডিলিট করো।
+    """
+    filt = {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": msg_ids}}
+
+    media_deleted = 0
+    matched_docs = list(db.messages.find(filt, {"_id": 1, "msg_id": 1, "media": 1,
+                                                "gfs_id": 1, "gridfs_id": 1, "fs_id": 1,
+                                                "file_id": 1, "thumb_gfs_id": 1}))
+    if delete_media and matched_docs:
+        oids = set()
+        for d in matched_docs:
+            oids |= _collect_gridfs_ids(d)
+        for oid in oids:
+            try:
+                fs.delete(oid)
+                media_deleted += 1
+            except Exception as e:
+                # GridFS এ না থাকলে/আগেই ডিলিট হলে — স্কিপ
+                print(f"⚠️ GridFS delete failed for {oid}: {e}")
+
+    if hard_delete:
+        res = db.messages.delete_many(filt)
+        return {"db_op": "hard", "db_deleted_count": res.deleted_count,
+                "media_deleted_count": media_deleted}
+    else:
+        res = db.messages.update_many(
+            filt,
+            {"$set": {
+                "deleted": True,
+                "deleted_on_telegram": True,
+                "deleted_at": datetime.utcnow(),
+            }}
+        )
+        return {"db_op": "soft", "db_modified_count": res.modified_count,
+                "media_deleted_count": media_deleted}
+
+
+
+
+
+
+
+
+from flask import request, jsonify
+import asyncio
+
+from flask import request, jsonify
+import asyncio
+from telethon.errors import ChatAdminRequiredError, MessageDeleteForbiddenError
+
+from flask import request, jsonify
+
+@app.post("/delete_messages")
+def delete_messages_route():
+    """
+    JSON body (any of these id keys will work): ids | msg_ids | message_ids | messages | msgIds | messageIds
+    {
+      "phone": "+8801...",
+      "chat_id": 123456789,
+      "access_hash": -389606182307716397,   # optional
+      "ids": [111,222,333],                 # or msg_ids / message_ids / messages ...
+      "revoke": true,                       # default true (delete for everyone)
+      "erase_cached_media": false,          # alias: delete_media
+      "db_hard": false,                     # true = delete docs from Mongo instead of tombstone
+      "db_force": false                     # true = force tombstone even if Telegram delete failed
+    }
+    → { status, deleted_ids, failed_ids, note }
+    """
+    import asyncio
+    from telethon.errors import ChatAdminRequiredError, MessageDeleteForbiddenError
+    from gridfs import GridFS
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    data = request.get_json(silent=True) or {}
+
+    # ----- tiny helpers (local) -----
+    def _as_bool(v, default=False):
+        if v is None: return default
+        if isinstance(v, bool): return v
+        if isinstance(v, int): return bool(v)
+        if isinstance(v, str): return v.strip().lower() in ("1","true","yes","on","y")
+        return default
+
+    async def _resolve_peer_any_local(client, chat_id: int, access_hash: int | None):
+        # গ্লোবালটা থাকলে সেটাই
+        try:
+            _r = globals().get("_resolve_peer_any")
+            if callable(_r):
+                return await _r(client, chat_id, access_hash)
+        except Exception:
+            pass
+        # ফ্যালব্যাক
+        from telethon import types as T
+        if access_hash is not None:
+            try:    return T.InputPeerUser(int(chat_id), int(access_hash))
+            except:
+                try: return T.InputPeerChannel(int(chat_id), int(access_hash))
+                except: pass
+        try:    return await client.get_entity(int(chat_id))
+        except:
+            try: return T.InputPeerChat(int(chat_id))
+            except: return None
+
+    async def _check_exist(client, peer, id_list):
+        exist = set()
+        if not id_list: return exist
+        B = 100
+        for i in range(0, len(id_list), B):
+            chunk = id_list[i:i+B]
+            res = await client.get_messages(peer, ids=chunk)
+            if not isinstance(res, list): res = [res]
+            for mid, msg in zip(chunk, res):
+                if msg is not None:
+                    exist.add(int(mid))
+        return exist
+
+    async def _do_delete_with_client(client, phone, chat_id, access_hash, ids, revoke, erase_cached, db_hard, db_force):
+        if not await client.is_user_authorized():
+            return {"code":401, "body":{"status":"error","detail":"not authorized"}}
+
+        peer = await _resolve_peer_any_local(client, int(chat_id), access_hash)
+        if not peer:
+            return {"code":400, "body":{"status":"error","detail":"peer resolve failed"}}
+
+        # 1) try delete as requested
+        try:
+            await client.delete_messages(peer, ids, revoke=revoke)
+        except (ChatAdminRequiredError, MessageDeleteForbiddenError):
+            pass
+        except Exception as e:
+            print("⚠️ delete first pass:", e)
+
+        # 2) fallback self-only (if revoke requested)
+        if revoke:
+            still = await _check_exist(client, peer, ids)
+            rem = [i for i in ids if i in still]
+            if rem:
+                try:
+                    await client.delete_messages(peer, rem, revoke=False)
+                except Exception as e:
+                    print("⚠️ delete fallback self-only:", e)
+
+        # 3) final probe
+        still_after = await _check_exist(client, peer, ids)
+        deleted_ids = set(int(i) for i in ids if i not in still_after)
+        failed_ids  = [int(i) for i in ids if i in still_after]
+
+        # 4) DB changes
+        try:
+            if db_hard:
+                if deleted_ids:
+                    if erase_cached:
+                        fs = GridFS(db, collection="fs")
+                        cur = db.messages.find(
+                            {"phone": phone, "chat_id": int(chat_id),
+                             "msg_id": {"$in": list(deleted_ids)},
+                             "media_fs_id": {"$exists": True, "$ne": None}},
+                            {"media_fs_id":1}
+                        )
+                        for d in cur:
+                            try: fs.delete(ObjectId(d["media_fs_id"]))
+                            except (InvalidId, Exception): pass
+                    db.messages.delete_many(
+                        {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": list(deleted_ids)}}
+                    )
+                if db_force and failed_ids:
+                    db.messages.update_many(
+                        {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": failed_ids}},
+                        {"$set": {"deleted_on_telegram": True, "exists_on_telegram": False}}
+                    )
+            else:
+                if deleted_ids:
+                    db.messages.update_many(
+                        {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": list(deleted_ids)}},
+                        {"$set": {"deleted_on_telegram": True, "exists_on_telegram": False}}
+                    )
+                    if erase_cached:
+                        fs = GridFS(db, collection="fs")
+                        cur = db.messages.find(
+                            {"phone": phone, "chat_id": int(chat_id),
+                             "msg_id": {"$in": list(deleted_ids)},
+                             "media_fs_id": {"$exists": True, "$ne": None}},
+                            {"media_fs_id":1}
+                        )
+                        for d in cur:
+                            try: fs.delete(ObjectId(d["media_fs_id"]))
+                            except (InvalidId, Exception): pass
+                        db.messages.update_many(
+                            {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": list(deleted_ids)}},
+                            {"$unset": {"media_fs_id": "", "mime_type": "", "file_name": ""}}
+                        )
+                if db_force and failed_ids:
+                    db.messages.update_many(
+                        {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": failed_ids}},
+                        {"$set": {"deleted_on_telegram": True, "exists_on_telegram": False}}
+                    )
+        except Exception as e:
+            print("⚠️ db/gridfs update error:", e)
+
+        return {
+            "code":200,
+            "body":{
+                "status":"ok",
+                "deleted_ids": sorted(list(deleted_ids)),
+                "failed_ids":  failed_ids,
+                "note":"deleted where permitted; fallback self-only used if needed; DB updated per flags."
+            }
+        }
+
+    # ----- parse inputs -----
+    phone = (data.get("phone") or "").strip()
+    if not phone:
+        return jsonify({"status":"error","detail":"phone required"}), 400
     try:
         chat_id = int(data.get("chat_id"))
     except Exception:
         return jsonify({"status":"error","detail":"chat_id (int) required"}), 400
 
-    # access_hash optional
+    ah = data.get("access_hash")
     try:
-        access_hash = int(data.get("access_hash")) if data.get("access_hash") not in (None, "",) else None
+        access_hash = int(ah) if ah not in (None, "", "null") else None
     except Exception:
         access_hash = None
 
-    # msg_ids normalize
-    raw_ids = data.get("msg_ids") or ([data.get("msg_id")] if data.get("msg_id") is not None else None)
-    if not raw_ids:
-        return jsonify({"status":"error","detail":"msg_ids or msg_id required"}), 400
+    raw_ids = (
+        data.get("ids")
+        or data.get("msg_ids")
+        or data.get("message_ids")
+        or data.get("messages")
+        or data.get("msgIds")
+        or data.get("messageIds")
+        or []
+    )
     try:
-        msg_ids = sorted({int(x) for x in raw_ids if x is not None})
+        ids = [int(x) for x in raw_ids]
     except Exception:
-        return jsonify({"status":"error","detail":"msg_ids must be integers"}), 400
-    if not msg_ids:
-        return jsonify({"status":"error","detail":"empty msg_ids"}), 400
+        return jsonify({"status":"error","detail":"ids must be a list of integers"}), 400
+    if not ids:
+        return jsonify({"status":"error","detail":"ids cannot be empty"}), 400
 
-    # revoke / for everyone
-    rv = data.get("revoke", True)
-    if isinstance(rv, str):
-        rv = rv.lower() in ("1","true","yes","y")
-    revoke = bool(rv)
+    revoke       = _as_bool(data.get("revoke"), True)
+    erase_cached = _as_bool(data.get("erase_cached_media"), False) or _as_bool(data.get("delete_media"), False)
+    db_hard      = _as_bool(data.get("db_hard"), False)
+    db_force     = _as_bool(data.get("db_force"), False)
 
-    async def do_delete():
-        # ACTIVE_TG থাকলে সেটাই নাও (WS ডিসকানেক্ট না করে)
-        with ACTIVE_TG_LOCK:
-            active = ACTIVE_TG.get(phone)
-        client = active
-        created_here = False
-        if not client:
-            client = await get_client(phone)
-            await client.connect()
-            created_here = True
+    # ----- ALWAYS run in a local event loop (fixes “no current event loop”) -----
+    try:
+        loop_local = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop_local)
 
-        try:
-            if not await client.is_user_authorized():
-                return {"code": 401, "body": {"status":"error","detail":"not authorized"}}
-
-            deleted = await _delete_messages_with_client(client, phone, chat_id, access_hash, msg_ids, revoke=revoke)
-
-            # Mongo tombstone update
-            if deleted:
-                db.messages.update_many(
-                    {"phone": phone, "chat_id": int(chat_id), "msg_id": {"$in": deleted}},
-                    {"$set": {"deleted_on_telegram": True}}
-                )
-
-            return {"code": 200, "body": {"status":"ok","deleted": deleted, "requested": msg_ids, "revoke": revoke}}
-        except ChatAdminRequiredError:
-            return {"code": 403, "body": {"status":"error","detail":"admin rights required to delete in this chat"}}
-        except MessageDeleteForbiddenError:
-            return {"code": 403, "body": {"status":"error","detail":"deletion is not allowed for these messages"}}
-        except Exception as e:
-            return {"code": 500, "body": {"status":"error","detail": str(e)}}
-        finally:
-            if created_here:
-                try: await client.disconnect()
+        async def _job_local():
+            cli = await get_client(phone)   # get_client async; client তৈরি এই লুপেই হবে
+            await cli.connect()
+            try:
+                return await _do_delete_with_client(cli, phone, chat_id, access_hash, ids, revoke, erase_cached, db_hard, db_force)
+            finally:
+                try: await cli.disconnect()
                 except: pass
 
-    fut = asyncio.run_coroutine_threadsafe(do_delete(), loop)
-    res = fut.result(timeout=60)
-    return jsonify(res["body"]), res["code"]
+        res = loop_local.run_until_complete(_job_local())
+        return jsonify(res["body"]), res["code"]
+
+    except Exception as e:
+        print("❌ delete_messages_route fatal:", e)
+        return jsonify({"status":"error","detail": str(e)}), 500
+    finally:
+        try:
+            loop_local.close()
+        except Exception:
+            pass
 
 
 
